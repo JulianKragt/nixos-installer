@@ -40,7 +40,6 @@ func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) e
 	}); err != nil {
 		return err
 	}
-
 	if err := runner.Run(ctx, "Check SSH connection to target", func(ctx context.Context) error {
 		if err := commands.CheckSSH(ctx, env.Remote); err != nil {
 			return fmt.Errorf("ssh connection to target: %w", err)
@@ -50,67 +49,7 @@ func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) e
 		return err
 	}
 
-	var disk string
-	err := runner.Parallel(ctx,
-		runner.Step{
-			Title: "Check local tools",
-			Fn: func(ctx context.Context) error {
-				for _, tool := range []string{"nix", "ssh", "git", "nc"} {
-					if _, err := exec.LookPath(tool); err != nil {
-						return fmt.Errorf("%s not found in PATH", tool)
-					}
-				}
-				return nil
-			},
-		},
-		runner.Step{
-			Title: "Check internet connection",
-			Fn: func(ctx context.Context) error {
-				return commands.DialTCP(ctx, env.Local, "8.8.8.8:53")
-			},
-		},
-		runner.Step{
-			Title: "Check config flake",
-			Fn: func(ctx context.Context) error {
-				for _, p := range []string{
-					"flake.nix",
-					filepath.Join("hosts", "nixos", env.State.HostName, "bootstrap.nix"),
-				} {
-					if _, err := os.Stat(filepath.Join(s.Opts.ConfigDir, p)); err != nil {
-						return fmt.Errorf("config %s: %w", s.Opts.ConfigDir, err)
-					}
-				}
-				return nil
-			},
-		},
-		runner.Step{
-			Title: "Check SSH key",
-			Fn: func(ctx context.Context) error {
-				if os.Getenv("SSH_AUTH_SOCK") != "" {
-					return nil // keys come from ssh-agent
-				}
-				if _, err := os.Stat(s.SSHKey); err != nil {
-					return fmt.Errorf("ssh key: %w (and no ssh-agent running)", err)
-				}
-				return nil
-			},
-		},
-		runner.Step{
-			Title: "Resolve install disk",
-			Fn: func(ctx context.Context) error {
-				if s.Opts.Disk != "" {
-					disk = s.Opts.Disk
-					return nil
-				}
-				disks, err := commands.ListDisks(ctx, env.Remote)
-				if err != nil {
-					return fmt.Errorf("list disks on target: %w", err)
-				}
-				disk, err = s.chooseDisk(ctx, disks, env.State.Disk)
-				return err
-			},
-		},
-	)
+	disk, err := s.preflight(ctx, env)
 	if err != nil {
 		return err
 	}
@@ -126,6 +65,68 @@ func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) e
 	env.State.Disk = disk
 	runner.Info(ctx, "Disk: "+disk)
 	return nil
+}
+
+// preflight runs the independent checks concurrently and returns the install
+// disk. Only the disk step writes disk, and it is read after the join; the
+// steps must not touch env.State.
+func (s *EnvironmentPreparationStage) preflight(ctx context.Context, env *stage.Env) (string, error) {
+	var disk string
+	err := runner.Parallel(ctx,
+		runner.Step{Title: "Check local tools", Fn: checkLocalTools},
+		runner.Step{Title: "Check internet connection", Fn: func(ctx context.Context) error {
+			return commands.DialTCP(ctx, env.Local, "8.8.8.8:53")
+		}},
+		runner.Step{Title: "Check config flake", Fn: func(context.Context) error {
+			return s.checkConfig(env.State.HostName)
+		}},
+		runner.Step{Title: "Check SSH key", Fn: func(context.Context) error { return s.checkSSHKey() }},
+		runner.Step{Title: "Resolve install disk", Fn: func(ctx context.Context) (err error) {
+			disk, err = s.resolveDisk(ctx, env)
+			return err
+		}},
+	)
+	return disk, err
+}
+
+func checkLocalTools(context.Context) error {
+	for _, tool := range []string{"nix", "ssh", "git", "nc"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return fmt.Errorf("%s not found in PATH", tool)
+		}
+	}
+	return nil
+}
+
+func (s *EnvironmentPreparationStage) checkConfig(host string) error {
+	for _, p := range []string{"flake.nix", filepath.Join("hosts", "nixos", host, "bootstrap.nix")} {
+		if _, err := os.Stat(filepath.Join(s.Opts.ConfigDir, p)); err != nil {
+			return fmt.Errorf("config %s: %w", s.Opts.ConfigDir, err)
+		}
+	}
+	return nil
+}
+
+func (s *EnvironmentPreparationStage) checkSSHKey() error {
+	if os.Getenv("SSH_AUTH_SOCK") != "" {
+		return nil // keys come from ssh-agent
+	}
+	if _, err := os.Stat(s.SSHKey); err != nil {
+		return fmt.Errorf("ssh key: %w (and no ssh-agent running)", err)
+	}
+	return nil
+}
+
+// resolveDisk returns --disk when given, else detects disks on the target.
+func (s *EnvironmentPreparationStage) resolveDisk(ctx context.Context, env *stage.Env) (string, error) {
+	if s.Opts.Disk != "" {
+		return s.Opts.Disk, nil
+	}
+	disks, err := commands.ListDisks(ctx, env.Remote)
+	if err != nil {
+		return "", fmt.Errorf("list disks on target: %w", err)
+	}
+	return s.chooseDisk(ctx, disks, env.State.Disk)
 }
 
 // chooseDisk picks the install disk among the candidates found on the target.
@@ -155,8 +156,4 @@ func (s *EnvironmentPreparationStage) chooseDisk(ctx context.Context, candidates
 		return "", fmt.Errorf("%w (or pass --disk)", err)
 	}
 	return candidates[i].Path, nil
-}
-
-func (*EnvironmentPreparationStage) Rollback(ctx context.Context, env *stage.Env) error {
-	return nil
 }

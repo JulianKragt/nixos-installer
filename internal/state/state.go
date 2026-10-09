@@ -14,10 +14,6 @@ type State struct {
 	ConfigDir string
 	Disk      string
 
-	HostRecipient string
-	SecretsCommit string
-	Converged     bool
-
 	CompletedStages []string
 }
 

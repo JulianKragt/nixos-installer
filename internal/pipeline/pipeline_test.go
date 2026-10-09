@@ -24,7 +24,6 @@ func (f fakeStage) Run(ctx context.Context, env *stage.Env) error {
 	*f.ran = append(*f.ran, f.name)
 	return nil
 }
-func (f fakeStage) Rollback(ctx context.Context, env *stage.Env) error { return nil }
 
 func TestRunsOnlyPendingStagesInOrder(t *testing.T) {
 	var ran []string

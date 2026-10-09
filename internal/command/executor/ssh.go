@@ -43,9 +43,6 @@ func (e *SSH) Run(ctx context.Context, cmd command.Command, opts ExecOptions) (c
 	if e.Host == "" {
 		return command.Result{}, errors.New("ssh: no host set")
 	}
-	if opts.Dir != "" || len(opts.Env) > 0 {
-		return command.Result{}, errors.New("ssh: ExecOptions.Dir and Env are not supported")
-	}
 
 	auth, closeAgent, err := e.authMethods()
 	if err != nil {

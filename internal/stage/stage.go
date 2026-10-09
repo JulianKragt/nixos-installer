@@ -19,7 +19,6 @@ type Stage interface {
 	ID() string
 	Name() string
 	Run(ctx context.Context, env *Env) error
-	Rollback(ctx context.Context, env *Env) error
 }
 
 // AlwaysRun is implemented by stages that must run on every invocation, even
