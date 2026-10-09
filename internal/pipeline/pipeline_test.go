@@ -11,12 +11,12 @@ import (
 )
 
 type fakeStage struct {
-	idx  int
+	id   string
 	name string
 	ran  *[]string
 }
 
-func (f fakeStage) Index() int   { return f.idx }
+func (f fakeStage) ID() string   { return f.id }
 func (f fakeStage) Name() string { return f.name }
 func (f fakeStage) Run(ctx context.Context, env *stage.Env) error {
 	*f.ran = append(*f.ran, f.name)
@@ -27,13 +27,14 @@ func (f fakeStage) Rollback(ctx context.Context, env *stage.Env) error { return 
 func TestRunsOnlyPendingStagesInOrder(t *testing.T) {
 	var ran []string
 	stages := []stage.Stage{
-		fakeStage{3, "c", &ran},
-		fakeStage{1, "a", &ran},
-		fakeStage{2, "b", &ran},
+		fakeStage{"0.3", "c", &ran},
+		fakeStage{"0.1", "a", &ran},
+		fakeStage{"0.2", "b", &ran},
 	}
 	var out bytes.Buffer
 	ctx := runner.NewContext(context.Background(), runner.New(runner.Options{Out: &out}))
-	p := New(stages, &stage.Env{State: &state.State{StageIndex: 1}})
+	st := &state.State{CompletedStages: []string{"0.1"}}
+	p := New(stages, &stage.Env{State: st}, t.TempDir())
 	if err := p.Run(ctx); err != nil {
 		t.Fatal(err)
 	}

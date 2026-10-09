@@ -6,6 +6,7 @@ import (
 	"installer/internal/command"
 	"installer/internal/runner"
 	"io"
+	"os"
 	"os/exec"
 )
 
@@ -15,30 +16,28 @@ func NewLocal() *Local {
 	return &Local{}
 }
 
-func (e *Local) Run(ctx context.Context, cmd command.Command) command.Result {
-	process := exec.CommandContext(
-		ctx,
-		cmd.Name(),
-		cmd.Args()...,
-	)
+func (e *Local) Run(ctx context.Context, cmd command.Command, opts ExecOptions) (command.Result, error) {
+	process := exec.CommandContext(ctx, cmd.Name(), cmd.Args()...)
+	process.Stdin = opts.Stdin
+	process.Dir = opts.Dir
+	if len(opts.Env) > 0 {
+		process.Env = append(os.Environ(), opts.Env...)
+	}
 
 	var output bytes.Buffer
-
-	// One writer for both streams, so exec serializes the writes.
 	w := io.MultiWriter(&output, runner.Output(ctx))
 	process.Stdout = w
 	process.Stderr = w
 
 	err := process.Run()
 
-	result := command.Result{
-		Output: output.String(),
-		Err:    err,
+	if process.ProcessState == nil {
+		// Process never started — exec launch failure.
+		return command.Result{}, err
 	}
 
-	if process.ProcessState != nil {
-		result.ExitCode = process.ProcessState.ExitCode()
-	}
-
-	return result
+	return command.Result{
+		Output:   output.String(),
+		ExitCode: process.ProcessState.ExitCode(),
+	}, nil
 }

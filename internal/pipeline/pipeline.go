@@ -5,22 +5,22 @@ import (
 	"installer/internal/runner"
 	"installer/internal/stage"
 	"sort"
-	"strconv"
 	"strings"
 )
 
 type Pipeline struct {
-	stages []stage.Stage
-	env    *stage.Env
+	stages   []stage.Stage
+	env      *stage.Env
+	stateDir string
 }
 
-func New(stages []stage.Stage, env *stage.Env) Pipeline {
+func New(stages []stage.Stage, env *stage.Env, stateDir string) Pipeline {
 	sorted := make([]stage.Stage, len(stages))
 	copy(sorted, stages)
 	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Index() < sorted[j].Index()
+		return sorted[i].ID() < sorted[j].ID()
 	})
-	return Pipeline{stages: sorted, env: env}
+	return Pipeline{stages: sorted, env: env, stateDir: stateDir}
 }
 
 func stageNames(ss []stage.Stage) []string {
@@ -34,10 +34,14 @@ func stageNames(ss []stage.Stage) []string {
 func (p *Pipeline) Run(ctx context.Context) error {
 	runner.Info(ctx, "Starting pipeline")
 
+	completed := make(map[string]struct{}, len(p.env.State.CompletedStages))
+	for _, id := range p.env.State.CompletedStages {
+		completed[id] = struct{}{}
+	}
+
 	var skipped, pending []stage.Stage
 	for _, s := range p.stages {
-		runner.Debug(ctx, "Processing stage "+strconv.Itoa(s.Index())+": "+s.Name())
-		if s.Index() <= p.env.State.StageIndex {
+		if _, done := completed[s.ID()]; done {
 			skipped = append(skipped, s)
 		} else {
 			pending = append(pending, s)
@@ -50,10 +54,10 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	}
 
 	if len(skipped) > 0 {
-		runner.Warn(ctx, "Skipping already processed stages: "+strings.Join(stageNames(skipped), ","))
+		runner.Warn(ctx, "Skipping already processed stages: "+strings.Join(stageNames(skipped), ", "))
 	}
 
-	runner.Info(ctx, "Stages to process: "+strings.Join(stageNames(pending), ","))
+	runner.Info(ctx, "Stages to process: "+strings.Join(stageNames(pending), ", "))
 
 	for _, s := range pending {
 		err := runner.Run(ctx, s.Name(), func(ctx context.Context) error {
@@ -62,7 +66,12 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		p.env.State.CompletedStages = append(p.env.State.CompletedStages, s.ID())
+		if saveErr := p.env.State.Save(p.stateDir); saveErr != nil {
+			runner.Warn(ctx, "Failed to persist state: "+saveErr.Error())
+		}
 	}
-	runner.Debug(ctx, "Pipeline processed stages: "+strings.Join(stageNames(pending), ","))
+
+	runner.Debug(ctx, "Pipeline processed stages: "+strings.Join(stageNames(pending), ", "))
 	return nil
 }

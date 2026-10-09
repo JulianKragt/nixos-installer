@@ -15,7 +15,7 @@ type Env struct {
 }
 
 type Stage interface {
-	Index() int
+	ID() string
 	Name() string
 	Run(ctx context.Context, env *Env) error
 	Rollback(ctx context.Context, env *Env) error

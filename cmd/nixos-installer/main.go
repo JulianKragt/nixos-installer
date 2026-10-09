@@ -5,8 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"installer/internal/command/executor"
-	"installer/internal/runner"
 	"installer/internal/pipeline"
+	"installer/internal/runner"
 	"installer/internal/stage"
 	"installer/internal/stages"
 	"installer/internal/state"
@@ -32,10 +32,15 @@ func run() int {
 	verbose := flag.Bool("verbose", false, "Enable verbose logging")
 	flag.Parse()
 
-	st := &state.State{
-		HostName: "atlas",
-		Target:   "192.168.1.100",
+	stateDir := xdgStateDir("nixos-installer")
+
+	const hostname = "atlas"
+	st, err := state.Load(stateDir, hostname)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: load state: %v\n", err)
+		return 1
 	}
+	st.Target = "192.168.1.100"
 
 	opts := runner.Options{Out: os.Stderr, Verbose: *verbose}
 	logPath, logFile, err := openLogFile(st.HostName)
@@ -50,7 +55,7 @@ func run() int {
 	ctx = runner.NewContext(ctx, logger)
 
 	env := &stage.Env{State: st, Local: executor.NewLocal()}
-	p := pipeline.New([]stage.Stage{stages.ProviderPreparationStage{}}, env)
+	p := pipeline.New([]stage.Stage{stages.ProviderPreparationStage{}}, env, stateDir)
 	runErr := p.Run(ctx)
 
 	logger.Close()
@@ -63,17 +68,22 @@ func run() int {
 	return 0
 }
 
-// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/<host>-<time>.log.
-func openLogFile(host string) (string, *os.File, error) {
+// xdgStateDir returns ${XDG_STATE_HOME:-~/.local/state}/<app>.
+func xdgStateDir(app string) string {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", nil, err
+			return filepath.Join(".", ".state", app)
 		}
 		base = filepath.Join(home, ".local", "state")
 	}
-	dir := filepath.Join(base, "nixos-installer", "logs")
+	return filepath.Join(base, app)
+}
+
+// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/<host>-<time>.log.
+func openLogFile(host string) (string, *os.File, error) {
+	dir := filepath.Join(xdgStateDir("nixos-installer"), "logs")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", nil, err
 	}

@@ -21,9 +21,8 @@ const (
 
 var spinnerFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// format renders a message with its args. If the message contains a format
-// verb ("%"), args are applied with fmt.Sprintf. Otherwise args are treated
-// as alternating key/value pairs and appended as key=value.
+// format renders a message with its args. Args are treated as alternating
+// key/value pairs and appended as " key=value" after the message.
 func format(message string, args []any) string {
 	if len(args) == 0 {
 		return message
