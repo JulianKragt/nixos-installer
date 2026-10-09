@@ -11,7 +11,6 @@ import (
 	"installer/internal/runner"
 	"installer/internal/stage"
 	"installer/internal/stages"
-	"installer/internal/state"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -45,8 +44,6 @@ func run() int {
 	}
 
 	stateDir := appStateDir()
-	st := &state.State{}
-
 	logOpts := runner.Options{Out: os.Stderr, Verbose: opts.Verbose}
 	logPath, logFile, err := openLogFile()
 	if err != nil {
@@ -59,6 +56,16 @@ func run() int {
 	logger := runner.New(logOpts)
 	ctx = runner.NewContext(ctx, logger)
 
+	in := runner.NewInput(os.Stdin)
+	st, err := resolveInputs(ctx, &opts, in, stateDir)
+	if err != nil {
+		logger.Close()
+		if logFile != nil {
+			fmt.Fprintf(os.Stderr, "Full log: %s\n", logPath)
+		}
+		return 1
+	}
+
 	home, _ := os.UserHomeDir()
 	sshKey := filepath.Join(home, ".ssh", "id_ed25519")
 	remote := &stage.TargetSSH{SSH: executor.SSH{User: "root", KeyPath: sshKey}, State: st}
@@ -68,7 +75,7 @@ func run() int {
 			Opts:     opts,
 			SSHKey:   sshKey,
 			StateDir: stateDir,
-			In:       runner.NewInput(os.Stdin),
+			In:       in,
 		},
 	}, env, stateDir)
 	runErr := p.Run(ctx)

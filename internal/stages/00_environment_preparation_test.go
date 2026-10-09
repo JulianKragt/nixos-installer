@@ -2,11 +2,8 @@ package stages
 
 import (
 	"context"
-	"installer/internal/cli"
 	"installer/internal/commands"
 	"installer/internal/runner"
-	"installer/internal/stage"
-	"installer/internal/state"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,21 +35,6 @@ func newConfig(t *testing.T, hosts ...string) string {
 		}
 	}
 	return dir
-}
-
-func TestResolveLoadsStateAndTarget(t *testing.T) {
-	s := &EnvironmentPreparationStage{
-		Opts:     cli.Options{ConfigDir: newConfig(t, "atlas"), Host: "atlas", TargetIP: "192.168.1.100"},
-		StateDir: t.TempDir(),
-		In:       answers(t, ""),
-	}
-	env := &stage.Env{State: &state.State{}}
-	if err := s.resolve(context.Background(), env); err != nil {
-		t.Fatal(err)
-	}
-	if env.State.HostName != "atlas" || env.State.Target != "192.168.1.100" {
-		t.Errorf("state: %+v", env.State)
-	}
 }
 
 func TestChooseDisk(t *testing.T) {

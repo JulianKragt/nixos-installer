@@ -9,7 +9,6 @@ import (
 	"installer/internal/commands"
 	"installer/internal/runner"
 	"installer/internal/stage"
-	"installer/internal/state"
 	"net"
 	"os"
 	"os/exec"
@@ -18,6 +17,7 @@ import (
 
 // EnvironmentPreparationStage resolves the CLI inputs and checks the provider
 // machine before anything touches the target. It runs on every invocation.
+// Opts must already be completed (see resolveInputs in cmd/nixos-installer).
 type EnvironmentPreparationStage struct {
 	Opts     cli.Options
 	SSHKey   string // private key used to reach the target
@@ -34,39 +34,7 @@ func (s *EnvironmentPreparationStage) asker(ctx context.Context) cli.Asker {
 	return func(prompt string) (string, error) { return runner.Ask(ctx, s.In, prompt) }
 }
 
-// resolve asks for whatever the flags left empty (target, host), then loads
-// the persisted state of the chosen host, since state is keyed by host name.
-func (s *EnvironmentPreparationStage) resolve(ctx context.Context, env *stage.Env) error {
-	ask := s.asker(ctx)
-	if err := s.Opts.CompleteTarget(ask); err != nil {
-		return err
-	}
-	hosts, err := cli.ListHosts(s.Opts.ConfigDir)
-	if err != nil {
-		return err
-	}
-	host, err := cli.PickHost(ask, hosts, s.Opts.Host)
-	if err != nil {
-		return err
-	}
-	st, err := state.Load(s.StateDir, host)
-	if err != nil {
-		return err
-	}
-	*env.State = *st
-	env.State.Target = s.Opts.TargetIP
-	runner.Info(ctx, "Target: "+s.Opts.TargetIP)
-	runner.Info(ctx, "Host: "+host)
-	return nil
-}
-
 func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) error {
-	if err := runner.Run(ctx, "Checking inputs", func(ctx context.Context) error {
-		return s.resolve(ctx, env)
-	}); err != nil {
-		return err
-	}
-
 	if err := runner.Run(ctx, "Check target is reachable", func(ctx context.Context) error {
 		return commands.DialTCP(ctx, env.Local, net.JoinHostPort(env.State.Target, executor.DefaultSSHPort))
 	}); err != nil {
