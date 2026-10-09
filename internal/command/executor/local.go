@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"installer/internal/command"
-	"installer/internal/runner"
-	"io"
 	"os"
 	"os/exec"
 )
@@ -25,7 +23,7 @@ func (e *Local) Run(ctx context.Context, cmd command.Command, opts ExecOptions) 
 	}
 
 	var output bytes.Buffer
-	w := io.MultiWriter(&output, runner.Output(ctx))
+	w := Tee(&output, opts.Out)
 	process.Stdout = w
 	process.Stderr = w
 

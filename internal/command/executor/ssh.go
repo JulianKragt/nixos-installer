@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"installer/internal/command"
-	"installer/internal/runner"
 	"io"
 	"net"
 	"os"
@@ -95,7 +94,7 @@ func (e *SSH) Run(ctx context.Context, cmd command.Command, opts ExecOptions) (c
 	cmdStr := strings.Join(escaped, " ")
 
 	var output bytes.Buffer
-	w := &lockedWriter{w: io.MultiWriter(&output, runner.Output(ctx))}
+	w := &lockedWriter{w: Tee(&output, opts.Out)}
 	session.Stdout = w
 	session.Stderr = w
 
