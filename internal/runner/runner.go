@@ -1,7 +1,7 @@
 // Package runner keeps a tree of tasks in memory and renders it as a live area
 // on the terminal. The current task travels in a context.Context, so nested
-// and parallel code runs under the correct parent without passing a runner
-// around.
+// and parallel code runs under the correct parent without passing a *Runner
+// to every function.
 package runner
 
 import (
@@ -15,7 +15,7 @@ import (
 	"golang.org/x/term"
 )
 
-// Level determines the visibility/severity of a log message.
+// Level determines the visibility/severity of a message.
 type Level int
 
 const (
@@ -51,6 +51,7 @@ type Runner struct {
 	size func() (width, height int)
 
 	roots     []*node
+	orphans   []*node
 	committed int // roots[:committed] are flushed above the live area
 	pending   strings.Builder
 	liveLines int
@@ -135,6 +136,11 @@ func (l *Runner) Close() error {
 		for _, r := range l.roots[l.committed:] {
 			if r.kind == kindTask {
 				l.endLocked(r, errClosed)
+			}
+		}
+		for _, n := range l.orphans {
+			if n.kind == kindTask {
+				l.endLocked(n, errClosed)
 			}
 		}
 		l.closed = true

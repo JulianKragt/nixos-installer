@@ -15,9 +15,5 @@ func (p Ping) Name() string {
 }
 
 func (p Ping) Args() []string {
-	return []string{
-		"-c",
-		"1",
-		p.Host,
-	}
+	return []string{"-c", "1", "-W", "5", p.Host}
 }

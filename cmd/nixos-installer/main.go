@@ -63,7 +63,7 @@ func run() int {
 	return 0
 }
 
-// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/<host>-<time>.runner.
+// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/<host>-<time>.log.
 func openLogFile(host string) (string, *os.File, error) {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {

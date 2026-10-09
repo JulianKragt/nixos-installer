@@ -29,10 +29,6 @@ func format(message string, args []any) string {
 		return message
 	}
 
-	if strings.Contains(message, "%") {
-		return fmt.Sprintf(message, args...)
-	}
-
 	var b strings.Builder
 	b.WriteString(message)
 
@@ -56,7 +52,7 @@ func format(message string, args []any) string {
 // readable in key=value output.
 func formatValue(v any) string {
 	s := fmt.Sprint(v)
-	if s == "" || strings.ContainsAny(s, " \t\"") {
+	if s == "" || strings.ContainsAny(s, " \t\"=") {
 		return strconv.Quote(s)
 	}
 	return s

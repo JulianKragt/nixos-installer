@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -129,6 +130,7 @@ func start(ctx context.Context, title string, level Level) (context.Context, *Ta
 		l.roots = append(l.roots, n)
 	case v.n.root().committed || v.n.state != stateRunning:
 		n.orphan = true
+		l.orphans = append(l.orphans, n)
 	default:
 		v.n.children = append(v.n.children, n)
 	}
@@ -149,27 +151,23 @@ func (t *Task) End(errp *error) {
 }
 
 // Done finishes the task successfully.
-func (t *Task) Done() { t.finish(nil, false) }
+func (t *Task) Done() { t.finish(nil) }
 
 // Fail finishes the task as failed.
 func (t *Task) Fail(err error) {
 	if err == nil {
 		err = errors.New("failed")
 	}
-	t.finish(err, true)
+	t.finish(err)
 }
 
-func (t *Task) finish(err error, failed bool) {
+func (t *Task) finish(err error) {
 	if t == nil || t.l == nil {
 		return
 	}
 	t.l.mu.Lock()
 	defer t.l.mu.Unlock()
-	if failed {
-		t.l.endLocked(t.n, err)
-	} else {
-		t.l.endLocked(t.n, nil)
-	}
+	t.l.endLocked(t.n, err)
 	t.l.afterEvent()
 }
 
@@ -303,7 +301,9 @@ func Parallel(ctx context.Context, steps ...Step) error {
 			var err error
 			defer func() {
 				if r := recover(); r != nil {
-					err = fmt.Errorf("panic: %v", r)
+					buf := make([]byte, 4096)
+					n := runtime.Stack(buf, false)
+					err = fmt.Errorf("panic: %v\n%s", r, buf[:n])
 					tasks[i].Fail(err)
 					errs[i] = err
 					cancel()
@@ -321,10 +321,13 @@ func Parallel(ctx context.Context, steps ...Step) error {
 
 	var out []error
 	for _, err := range errs {
-		if err == nil || (errors.Is(err, context.Canceled) && parent.Err() == nil) {
+		if err == nil || errors.Is(err, context.Canceled) {
 			continue
 		}
 		out = append(out, err)
 	}
-	return errors.Join(out...)
+	if len(out) > 0 {
+		return errors.Join(out...)
+	}
+	return parent.Err()
 }

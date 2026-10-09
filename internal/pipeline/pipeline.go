@@ -15,33 +15,32 @@ type Pipeline struct {
 }
 
 func New(stages []stage.Stage, env *stage.Env) Pipeline {
-	return Pipeline{
-		stages: stages,
-		env:    env,
+	sorted := make([]stage.Stage, len(stages))
+	copy(sorted, stages)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Index() < sorted[j].Index()
+	})
+	return Pipeline{stages: sorted, env: env}
+}
+
+func stageNames(ss []stage.Stage) []string {
+	names := make([]string, len(ss))
+	for i, s := range ss {
+		names[i] = s.Name()
 	}
+	return names
 }
 
 func (p *Pipeline) Run(ctx context.Context) error {
 	runner.Info(ctx, "Starting pipeline")
 
-	sorted := make([]stage.Stage, len(p.stages))
-	copy(sorted, p.stages)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Index() < sorted[j].Index()
-	})
-	runner.Debug(ctx, "Pipeline sorted provided stages")
-
-	pending := make([]stage.Stage, 0, len(sorted))
-	pendingNames := make([]string, 0, len(sorted))
-	processedNames := make([]string, 0, len(sorted))
-
-	for _, s := range sorted {
+	var skipped, pending []stage.Stage
+	for _, s := range p.stages {
 		runner.Debug(ctx, "Processing stage "+strconv.Itoa(s.Index())+": "+s.Name())
 		if s.Index() <= p.env.State.StageIndex {
-			processedNames = append(processedNames, s.Name())
+			skipped = append(skipped, s)
 		} else {
 			pending = append(pending, s)
-			pendingNames = append(pendingNames, s.Name())
 		}
 	}
 
@@ -50,11 +49,11 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		return nil
 	}
 
-	if len(processedNames) > 0 {
-		runner.Warn(ctx, "Skipping already processed stages: "+strings.Join(processedNames, ","))
+	if len(skipped) > 0 {
+		runner.Warn(ctx, "Skipping already processed stages: "+strings.Join(stageNames(skipped), ","))
 	}
 
-	runner.Info(ctx, "Stages to process: "+strings.Join(pendingNames, ","))
+	runner.Info(ctx, "Stages to process: "+strings.Join(stageNames(pending), ","))
 
 	for _, s := range pending {
 		err := runner.Run(ctx, s.Name(), func(ctx context.Context) error {
@@ -64,6 +63,6 @@ func (p *Pipeline) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	runner.Debug(ctx, "Pipeline processed stages: "+strings.Join(pendingNames, ","))
+	runner.Debug(ctx, "Pipeline processed stages: "+strings.Join(stageNames(pending), ","))
 	return nil
 }
