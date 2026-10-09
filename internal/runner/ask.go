@@ -20,7 +20,23 @@ func Ask(ctx context.Context, in *Input, prompt string) (string, error) {
 	}
 	l := v.l
 
+	pr := l.beginPrompt(v.n, prompt)
+	line, err := in.ReadLine(ctx)
+	l.endPrompt(pr, line, err)
+	return line, err
+}
+
+// prompt is what endPrompt needs to erase the question again.
+type prompt struct {
+	plain string // question text without ANSI codes
+	width int
+	tty   bool
+}
+
+// beginPrompt freezes the live area and prints the question inside task n.
+func (l *Runner) beginPrompt(n *node, text string) prompt {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.drawLocked()
 	l.suspended = true
 	if l.tty && l.hidden {
@@ -29,35 +45,35 @@ func Ask(ctx context.Context, in *Input, prompt string) (string, error) {
 	}
 	if !l.tty {
 		// Nothing is rendered until a task finishes; say where we are.
-		l.write("▸ " + v.n.path() + "\n")
+		l.write("▸ " + n.path() + "\n")
 	}
 	depth := 0
-	if v.n != nil {
-		depth = v.n.depth() + 1 // same indentation as log lines of this task
+	if n != nil {
+		depth = n.depth() + 1 // same indentation as log lines of this task
 	}
-	shown, plain := layoutPrompt(prompt, depth, l.tty)
+	shown, plain := layoutPrompt(text, depth, l.tty)
 	l.write(shown)
 	width, _ := l.size()
-	tty := l.tty
-	l.mu.Unlock()
+	return prompt{plain: plain, width: width, tty: l.tty}
+}
 
-	line, err := in.ReadLine(ctx)
-
+// endPrompt erases the question and answer again and thaws the live area.
+func (l *Runner) endPrompt(p prompt, line string, readErr error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if tty {
-		if err != nil && line == "" {
+	if p.tty {
+		if readErr != nil && line == "" {
 			// no newline was echoed (EOF or cancelled)
 			l.write("\n")
 		}
+		width := p.width
 		if width <= 0 {
 			width = 80
 		}
-		l.write(fmt.Sprintf("\033[%dA\r\033[J", promptLines(plain+line, width)))
+		l.write(fmt.Sprintf("\033[%dA\r\033[J", promptLines(p.plain+line, width)))
 	}
 	l.suspended = false
 	l.drawLocked()
-	return line, err
 }
 
 // layoutPrompt indents prompt like a log line with a "?" symbol; continuation

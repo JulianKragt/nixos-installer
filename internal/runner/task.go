@@ -259,12 +259,23 @@ func Run(ctx context.Context, title string, fn func(context.Context) error) (err
 	ctx, t := Start(ctx, title)
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fail(fmt.Errorf("panic: %v", r))
+			t.Fail(panicError(r, false))
 			panic(r)
 		}
 		t.End(&err)
 	}()
 	return fn(ctx)
+}
+
+// panicError turns a recovered panic value into an error, optionally with the
+// panicking goroutine's stack (for panics that are not re-raised).
+func panicError(r any, withStack bool) error {
+	if !withStack {
+		return fmt.Errorf("panic: %v", r)
+	}
+	buf := make([]byte, 4096)
+	n := runtime.Stack(buf, false)
+	return fmt.Errorf("panic: %v\n%s", r, buf[:n])
 }
 
 // Step is one unit of work for Parallel.
@@ -301,9 +312,7 @@ func Parallel(ctx context.Context, steps ...Step) error {
 			var err error
 			defer func() {
 				if r := recover(); r != nil {
-					buf := make([]byte, 4096)
-					n := runtime.Stack(buf, false)
-					err = fmt.Errorf("panic: %v\n%s", r, buf[:n])
+					err = panicError(r, true)
 					tasks[i].Fail(err)
 					errs[i] = err
 					cancel()
