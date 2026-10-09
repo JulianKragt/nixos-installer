@@ -19,14 +19,11 @@ func (d Disk) String() string { return fmt.Sprintf("%s (%d GB)", d.Path, d.Size/
 
 // ListDisks returns the non-removable whole disks of the machine behind exec.
 func ListDisks(ctx context.Context, exec executor.Executor) ([]Disk, error) {
-	result, err := exec.Run(ctx, command.New("lsblk", "-dnb", "-o", "NAME,SIZE,TYPE,RM"), executor.ExecOptions{})
+	out, err := runOK(ctx, exec, command.New("lsblk", "-dnb", "-o", "NAME,SIZE,TYPE,RM"), "lsblk failed")
 	if err != nil {
 		return nil, err
 	}
-	if result.ExitCode != 0 {
-		return nil, fmt.Errorf("lsblk failed (exit %d): %s", result.ExitCode, strings.TrimSpace(result.Output))
-	}
-	return parseLsblk(result.Output), nil
+	return parseLsblk(out), nil
 }
 
 // parseLsblk keeps non-removable devices of type "disk" from
