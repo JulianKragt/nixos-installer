@@ -38,8 +38,18 @@ func TestParse(t *testing.T) {
 	if err := none.CompleteTarget(asker("")); err == nil {
 		t.Fatal("expected error on EOF")
 	}
-	if _, err := Parse([]string{"--target", "nope"}, &buf); err == nil {
-		t.Fatal("expected invalid IP error")
+	for _, bad := range []string{"nope", "127.0.0.1", "::1", "0.0.0.0", "224.0.0.1"} {
+		if _, err := Parse([]string{"--target", bad}, &buf); err == nil {
+			t.Fatalf("expected invalid target error for %q", bad)
+		}
+	}
+	for _, good := range []string{"2001:db8::5", "fe80::1%eth0"} {
+		if _, err := Parse([]string{"--target", good}, &buf); err != nil {
+			t.Fatalf("IPv6 target %q: %v", good, err)
+		}
+	}
+	if _, err := Parse([]string{"--target", "fe80::1"}, &buf); err == nil || !strings.Contains(err.Error(), "zone") {
+		t.Fatalf("link-local without zone should ask for a zone, got %v", err)
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -23,7 +25,26 @@ type SSH struct {
 	KeyPath string // path to ed25519 private key file
 }
 
+// lockedWriter serializes writes: ssh copies stdout and stderr on separate goroutines.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
 func (e *SSH) Run(ctx context.Context, cmd command.Command, opts ExecOptions) (command.Result, error) {
+	if e.Host == "" {
+		return command.Result{}, errors.New("ssh: no host set")
+	}
+	if opts.Dir != "" || len(opts.Env) > 0 {
+		return command.Result{}, errors.New("ssh: ExecOptions.Dir and Env are not supported")
+	}
+
 	auth, closeAgent, err := e.authMethods()
 	if err != nil {
 		return command.Result{}, err
@@ -34,6 +55,15 @@ func (e *SSH) Run(ctx context.Context, cmd command.Command, opts ExecOptions) (c
 		User:            e.User,
 		Auth:            auth,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: replace with TOFU once host key pinning is implemented
+		Timeout:         10 * time.Second,
+
+		// Go rejects RSA host keys under 1024 bits; prefer non-RSA host keys so
+		// a target that also offers ed25519/ecdsa still connects.
+		HostKeyAlgorithms: []string{
+			ssh.KeyAlgoED25519,
+			ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
+			ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256,
+		},
 	}
 
 	host := e.Host
@@ -65,7 +95,7 @@ func (e *SSH) Run(ctx context.Context, cmd command.Command, opts ExecOptions) (c
 	cmdStr := strings.Join(escaped, " ")
 
 	var output bytes.Buffer
-	w := io.MultiWriter(&output, runner.Output(ctx))
+	w := &lockedWriter{w: io.MultiWriter(&output, runner.Output(ctx))}
 	session.Stdout = w
 	session.Stderr = w
 
@@ -74,6 +104,8 @@ func (e *SSH) Run(ctx context.Context, cmd command.Command, opts ExecOptions) (c
 		select {
 		case <-ctx.Done():
 			session.Signal(ssh.SIGTERM)
+			// not every sshd forwards signals; drop the connection if the command lingers
+			time.AfterFunc(5*time.Second, func() { client.Close() })
 		case <-done:
 		}
 	}()

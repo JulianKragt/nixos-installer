@@ -13,10 +13,10 @@ import (
 // afterwards, so the question shows up inside the running task and leaves no
 // stray lines behind. Log the answer yourself if it should stay visible.
 // Without a runner in ctx the prompt is not shown and only the line is read.
-func Ask(ctx context.Context, in *bufio.Reader, prompt string) (string, error) {
+func Ask(ctx context.Context, in *Input, prompt string) (string, error) {
 	v := from(ctx)
 	if v == nil {
-		return readAnswer(ctx, in)
+		return in.ReadLine(ctx)
 	}
 	l := v.l
 
@@ -41,7 +41,7 @@ func Ask(ctx context.Context, in *bufio.Reader, prompt string) (string, error) {
 	tty := l.tty
 	l.mu.Unlock()
 
-	line, err := readAnswer(ctx, in)
+	line, err := in.ReadLine(ctx)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -90,17 +90,22 @@ func layoutPrompt(prompt string, depth int, color bool) (shown, plain string) {
 	return s.String(), p.String()
 }
 
-// readAnswer reads one line, giving up with ctx's error when ctx is cancelled
+// Input reads the operator's answers, one line at a time.
+type Input struct{ r *bufio.Reader }
+
+func NewInput(r io.Reader) *Input { return &Input{bufio.NewReader(r)} }
+
+// ReadLine reads one line, giving up with ctx's error when ctx is cancelled
 // (Ctrl+C) even though the read itself cannot be interrupted. The abandoned
 // read goroutine ends with the process.
-func readAnswer(ctx context.Context, in *bufio.Reader) (string, error) {
+func (in *Input) ReadLine(ctx context.Context) (string, error) {
 	type result struct {
 		line string
 		err  error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		line, err := in.ReadString('\n')
+		line, err := in.r.ReadString('\n')
 		ch <- result{strings.TrimSpace(line), err}
 	}()
 	select {

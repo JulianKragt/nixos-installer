@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,9 +45,14 @@ func Parse(args []string, stderr io.Writer) (Options, error) {
 	return o, nil
 }
 
-func validateTarget(ip string) error {
-	if net.ParseIP(ip) == nil {
-		return fmt.Errorf("--target: %q is not a valid IP address", ip)
+func validateTarget(s string) error {
+	ip, err := netip.ParseAddr(s) // IPv4, IPv6 and IPv6 with zone (fe80::1%eth0)
+	switch {
+	// Loopback and unspecified addresses would point the install at this machine.
+	case err != nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast():
+		return fmt.Errorf("--target: %q is not a valid target IP address", s)
+	case ip.Is6() && ip.IsLinkLocalUnicast() && ip.Zone() == "":
+		return fmt.Errorf("--target: link-local address %q needs a zone, e.g. %s%%eth0", s, s)
 	}
 	return nil
 }
@@ -113,19 +118,28 @@ func PickHost(ask Asker, hosts []string, want string) (string, error) {
 	if len(hosts) == 1 {
 		return hosts[0], nil
 	}
-	var b strings.Builder
-	b.WriteString("Select a host to install:\n")
-	for i, h := range hosts {
-		fmt.Fprintf(&b, "  %d) %s\n", i+1, h)
+	i, err := Choose(ask, "Select a host to install:", hosts)
+	if err != nil {
+		return "", err
 	}
-	b.WriteString("Host number: ")
+	return hosts[i], nil
+}
+
+// Choose shows a numbered list and returns the index the operator picks.
+func Choose(ask Asker, header string, items []string) (int, error) {
+	var b strings.Builder
+	b.WriteString(header + "\n")
+	for i, it := range items {
+		fmt.Fprintf(&b, "  %d) %s\n", i+1, it)
+	}
+	b.WriteString("Number: ")
 	line, err := ask(b.String())
 	if line == "" && err != nil {
-		return "", fmt.Errorf("read selection: %w", err)
+		return 0, fmt.Errorf("read selection: %w", err)
 	}
 	n, err := strconv.Atoi(line)
-	if err != nil || n < 1 || n > len(hosts) {
-		return "", fmt.Errorf("invalid selection %q", line)
+	if err != nil || n < 1 || n > len(items) {
+		return 0, fmt.Errorf("invalid selection %q", line)
 	}
-	return hosts[n-1], nil
+	return n - 1, nil
 }

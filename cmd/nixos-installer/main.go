@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -69,10 +68,9 @@ func run() int {
 			Opts:     opts,
 			SSHKey:   sshKey,
 			StateDir: stateDir,
-			In:       bufio.NewReader(os.Stdin),
+			In:       runner.NewInput(os.Stdin),
 			Remote:   remote,
 		},
-		stages.ProviderPreparationStage{},
 	}, env, stateDir)
 	runErr := p.Run(ctx)
 

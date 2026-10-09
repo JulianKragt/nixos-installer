@@ -1,8 +1,8 @@
 package stages
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"installer/internal/cli"
 	"installer/internal/command/executor"
@@ -10,6 +10,7 @@ import (
 	"installer/internal/runner"
 	"installer/internal/stage"
 	"installer/internal/state"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +22,7 @@ type EnvironmentPreparationStage struct {
 	Opts     cli.Options
 	SSHKey   string // private key used to reach the target
 	StateDir string
-	In       *bufio.Reader
+	In       *runner.Input
 	Remote   *executor.SSH // shared with Env.Remote; its Host is set from the target
 }
 
@@ -50,7 +51,7 @@ func (s *EnvironmentPreparationStage) resolve(ctx context.Context, env *stage.En
 	}
 	*env.State = *st
 	env.State.Target = s.Opts.TargetIP
-	s.Remote.Host = s.Opts.TargetIP + ":22"
+	s.Remote.Host = net.JoinHostPort(s.Opts.TargetIP, "22")
 	runner.Info(ctx, "Target: "+s.Opts.TargetIP)
 	runner.Info(ctx, "Host: "+host)
 	return nil
@@ -59,6 +60,21 @@ func (s *EnvironmentPreparationStage) resolve(ctx context.Context, env *stage.En
 func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) error {
 	if err := runner.Run(ctx, "Checking inputs", func(ctx context.Context) error {
 		return s.resolve(ctx, env)
+	}); err != nil {
+		return err
+	}
+
+	if err := runner.Run(ctx, "Check target is reachable", func(ctx context.Context) error {
+		return commands.DialTCP(ctx, env.Local, net.JoinHostPort(env.State.Target, "22"))
+	}); err != nil {
+		return err
+	}
+
+	if err := runner.Run(ctx, "Check SSH connection to target", func(ctx context.Context) error {
+		if err := commands.CheckSSH(ctx, env.Remote); err != nil {
+			return fmt.Errorf("ssh connection to target: %w", err)
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -74,6 +90,12 @@ func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) e
 					}
 				}
 				return nil
+			},
+		},
+		runner.Step{
+			Title: "Check internet connection",
+			Fn: func(ctx context.Context) error {
+				return commands.DialTCP(ctx, env.Local, "8.8.8.8:53")
 			},
 		},
 		runner.Step{
@@ -109,12 +131,12 @@ func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) e
 					disk = s.Opts.Disk
 					return nil
 				}
-				d, err := commands.DetectDisk(ctx, env.Remote)
+				disks, err := commands.ListDisks(ctx, env.Remote)
 				if err != nil {
-					return fmt.Errorf("detect disk on target: %w", err)
+					return fmt.Errorf("list disks on target: %w", err)
 				}
-				disk = d
-				return nil
+				disk, err = s.chooseDisk(ctx, disks, env.State.Disk)
+				return err
 			},
 		},
 	)
@@ -122,10 +144,47 @@ func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) e
 		return err
 	}
 
+	// A recorded disk means earlier stages already worked on it.
+	if env.State.Disk != "" && env.State.Disk != disk {
+		return fmt.Errorf("install disk is %s but %s was used before; remove %s to start over",
+			disk, env.State.Disk, filepath.Join(s.StateDir, env.State.HostName+".json"))
+	}
+
 	env.State.Target = s.Opts.TargetIP
 	env.State.ConfigDir = s.Opts.ConfigDir
 	env.State.Disk = disk
+	runner.Info(ctx, "Disk: "+disk)
 	return nil
+}
+
+// chooseDisk picks the install disk among the candidates found on the target.
+// The disk recorded by an earlier run wins, a lone candidate is taken as is and
+// with several the operator chooses. Without candidates the recorded disk stays.
+func (s *EnvironmentPreparationStage) chooseDisk(ctx context.Context, candidates []commands.Disk, recorded string) (string, error) {
+	for _, d := range candidates {
+		if d.Path == recorded {
+			return recorded, nil
+		}
+	}
+	switch len(candidates) {
+	case 0:
+		if recorded == "" {
+			return "", errors.New("no installable disk found on target; use --disk")
+		}
+		return recorded, nil
+	case 1:
+		return candidates[0].Path, nil
+	}
+	items := make([]string, len(candidates))
+	for i, d := range candidates {
+		items[i] = d.String()
+	}
+	i, err := cli.Choose(func(prompt string) (string, error) { return runner.Ask(ctx, s.In, prompt) },
+		"Select the install disk:", items)
+	if err != nil {
+		return "", fmt.Errorf("%w (or pass --disk)", err)
+	}
+	return candidates[i].Path, nil
 }
 
 func (*EnvironmentPreparationStage) Rollback(ctx context.Context, env *stage.Env) error {

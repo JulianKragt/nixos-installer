@@ -40,7 +40,6 @@ func alwaysRun(s stage.Stage) bool {
 
 func (p *Pipeline) Run(ctx context.Context) error {
 	runner.Info(ctx, "Starting pipeline")
-	runner.Info(ctx, "Stages to process: "+strings.Join(stageNames(p.stages), ", "))
 
 	// AlwaysRun stages go first: they may establish what the remaining
 	// stages are keyed on (the host whose state decides what is skipped).
@@ -82,6 +81,8 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	if len(skipped) > 0 {
 		runner.Warn(ctx, "Skipping already processed stages: "+strings.Join(stageNames(skipped), ", "))
 	}
+
+	runner.Info(ctx, "Stages to process: "+strings.Join(stageNames(pending), ", "))
 
 	for _, s := range pending {
 		err := runner.Run(ctx, stageTitle(s), func(ctx context.Context) error {
