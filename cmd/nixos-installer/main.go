@@ -61,7 +61,7 @@ func run() int {
 
 	home, _ := os.UserHomeDir()
 	sshKey := filepath.Join(home, ".ssh", "id_ed25519")
-	remote := &executor.SSH{User: "root", KeyPath: sshKey}
+	remote := &stage.TargetSSH{SSH: executor.SSH{User: "root", KeyPath: sshKey}, State: st}
 	env := &stage.Env{State: st, Local: streaming{executor.NewLocal()}, Remote: streaming{remote}}
 	p := pipeline.New([]stage.Stage{
 		&stages.EnvironmentPreparationStage{
@@ -69,7 +69,6 @@ func run() int {
 			SSHKey:   sshKey,
 			StateDir: stateDir,
 			In:       runner.NewInput(os.Stdin),
-			Remote:   remote,
 		},
 	}, env, stateDir)
 	runErr := p.Run(ctx)

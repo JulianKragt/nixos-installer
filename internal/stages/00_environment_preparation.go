@@ -23,7 +23,6 @@ type EnvironmentPreparationStage struct {
 	SSHKey   string // private key used to reach the target
 	StateDir string
 	In       *runner.Input
-	Remote   *executor.SSH // shared with Env.Remote; its Host is set from the target
 }
 
 func (*EnvironmentPreparationStage) ID() string      { return "0.0" }
@@ -56,7 +55,6 @@ func (s *EnvironmentPreparationStage) resolve(ctx context.Context, env *stage.En
 	}
 	*env.State = *st
 	env.State.Target = s.Opts.TargetIP
-	s.Remote.Host = net.JoinHostPort(s.Opts.TargetIP, executor.DefaultSSHPort)
 	runner.Info(ctx, "Target: "+s.Opts.TargetIP)
 	runner.Info(ctx, "Host: "+host)
 	return nil
