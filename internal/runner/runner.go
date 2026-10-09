@@ -58,6 +58,7 @@ type Runner struct {
 	frame     int
 	hidden    bool // cursor hidden
 	closed    bool
+	suspended bool // an Ask is waiting for input; the live area is frozen
 	writeErr  error
 	rootOut   *outputWriter
 

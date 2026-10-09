@@ -2,14 +2,10 @@ package stages
 
 import (
 	"context"
-	"fmt"
+	"installer/internal/commands"
 	"installer/internal/runner"
 	"installer/internal/stage"
-	"net"
-	"time"
 )
-
-const dialTimeout = 5 * time.Second
 
 type ProviderPreparationStage struct{}
 
@@ -21,28 +17,18 @@ func (ProviderPreparationStage) Run(ctx context.Context, env *stage.Env) error {
 		runner.Step{
 			Title: "Check internet connection",
 			Fn: func(ctx context.Context) error {
-				return dialTCP(ctx, "8.8.8.8:53")
+				return commands.DialTCP(ctx, env.Local, "8.8.8.8:53")
 			},
 		},
 		runner.Step{
 			Title: "Check target is reachable",
 			Fn: func(ctx context.Context) error {
-				return dialTCP(ctx, env.State.Target+":22")
+				return commands.DialTCP(ctx, env.Local, env.State.Target+":22")
 			},
 		},
 	)
 }
 
 func (ProviderPreparationStage) Rollback(ctx context.Context, env *stage.Env) error {
-	return nil
-}
-
-func dialTCP(ctx context.Context, addr string) error {
-	d := net.Dialer{Timeout: dialTimeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return fmt.Errorf("unreachable %s: %w", addr, err)
-	}
-	conn.Close()
 	return nil
 }

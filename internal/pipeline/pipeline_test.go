@@ -42,3 +42,28 @@ func TestRunsOnlyPendingStagesInOrder(t *testing.T) {
 		t.Fatalf("ran %s, want b,c", got)
 	}
 }
+
+type alwaysStage struct{ fakeStage }
+
+func (alwaysStage) AlwaysRun() bool { return true }
+
+func TestAlwaysRunStageRerunsAndIsNotRecorded(t *testing.T) {
+	var ran []string
+	stages := []stage.Stage{
+		fakeStage{"0.1", "a", &ran},
+		alwaysStage{fakeStage{"0.0", "env", &ran}},
+	}
+	var out bytes.Buffer
+	ctx := runner.NewContext(context.Background(), runner.New(runner.Options{Out: &out}))
+	st := &state.State{CompletedStages: []string{"0.0", "0.1"}}
+	p := New(stages, &stage.Env{State: st}, t.TempDir())
+	if err := p.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ran, ","); got != "env" {
+		t.Fatalf("ran %s, want env", got)
+	}
+	if got := strings.Join(st.CompletedStages, ","); got != "0.0,0.1" {
+		t.Fatalf("completed %s, want unchanged", got)
+	}
+}

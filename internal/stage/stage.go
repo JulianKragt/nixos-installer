@@ -10,8 +10,9 @@ import (
 // not write State; they return results and the stage assigns them after the
 // join.
 type Env struct {
-	State *state.State
-	Local executor.Executor
+	State  *state.State
+	Local  executor.Executor
+	Remote executor.Executor
 }
 
 type Stage interface {
@@ -19,4 +20,11 @@ type Stage interface {
 	Name() string
 	Run(ctx context.Context, env *Env) error
 	Rollback(ctx context.Context, env *Env) error
+}
+
+// AlwaysRun is implemented by stages that must run on every invocation, even
+// when already completed (e.g. input resolution). The pipeline does not record
+// them in State.CompletedStages.
+type AlwaysRun interface {
+	AlwaysRun() bool
 }

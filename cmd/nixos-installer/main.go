@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"installer/internal/cli"
 	"installer/internal/command/executor"
 	"installer/internal/pipeline"
 	"installer/internal/runner"
@@ -28,34 +31,49 @@ func run() int {
 		syscall.SIGTERM,
 	)
 	defer stop()
+	go func() { // restore default handling so a second Ctrl+C force-quits
+		<-ctx.Done()
+		stop()
+	}()
 
-	verbose := flag.Bool("verbose", false, "Enable verbose logging")
-	flag.Parse()
+	opts, err := cli.Parse(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
 
 	stateDir := xdgStateDir("nixos-installer")
+	st := &state.State{}
 
-	const hostname = "atlas"
-	st, err := state.Load(stateDir, hostname)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: load state: %v\n", err)
-		return 1
-	}
-	st.Target = "192.168.1.100"
-
-	opts := runner.Options{Out: os.Stderr, Verbose: *verbose}
-	logPath, logFile, err := openLogFile(st.HostName)
+	logOpts := runner.Options{Out: os.Stderr, Verbose: opts.Verbose}
+	logPath, logFile, err := openLogFile()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: no log file: %v\n", err)
 	} else {
 		defer logFile.Close()
-		opts.File = logFile
+		logOpts.File = logFile
 	}
 
-	logger := runner.New(opts)
+	logger := runner.New(logOpts)
 	ctx = runner.NewContext(ctx, logger)
 
-	env := &stage.Env{State: st, Local: executor.NewLocal()}
-	p := pipeline.New([]stage.Stage{stages.ProviderPreparationStage{}}, env, stateDir)
+	home, _ := os.UserHomeDir()
+	sshKey := filepath.Join(home, ".ssh", "id_ed25519")
+	remote := &executor.SSH{User: "root", KeyPath: sshKey}
+	env := &stage.Env{State: st, Local: executor.NewLocal(), Remote: remote}
+	p := pipeline.New([]stage.Stage{
+		&stages.EnvironmentPreparationStage{
+			Opts:     opts,
+			SSHKey:   sshKey,
+			StateDir: stateDir,
+			In:       bufio.NewReader(os.Stdin),
+			Remote:   remote,
+		},
+		stages.ProviderPreparationStage{},
+	}, env, stateDir)
 	runErr := p.Run(ctx)
 
 	logger.Close()
@@ -81,13 +99,13 @@ func xdgStateDir(app string) string {
 	return filepath.Join(base, app)
 }
 
-// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/<host>-<time>.log.
-func openLogFile(host string) (string, *os.File, error) {
+// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/install-<time>.log.
+func openLogFile() (string, *os.File, error) {
 	dir := filepath.Join(xdgStateDir("nixos-installer"), "logs")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", nil, err
 	}
-	path := filepath.Join(dir, fmt.Sprintf("%s-%s.log", host, time.Now().Format("20060102-150405")))
+	path := filepath.Join(dir, fmt.Sprintf("install-%s.log", time.Now().Format("20060102-150405")))
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return "", nil, err

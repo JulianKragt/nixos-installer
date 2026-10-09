@@ -9,8 +9,10 @@ import (
 )
 
 type State struct {
-	HostName string
-	Target   string
+	HostName  string
+	Target    string
+	ConfigDir string
+	Disk      string
 
 	HostRecipient string
 	SecretsCommit string

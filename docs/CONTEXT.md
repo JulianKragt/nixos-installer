@@ -15,13 +15,25 @@ Snapshot taken 2026-10-08 from `~/src/{config,nix-secrets,installer}`.
 
 | Repo | Local path | Remote | Role in pipeline |
 |---|---|---|---|
-| nixos-config | `~/src/config` | `git@github.com:JulianKragt/nixos-config.git` | Source of host definitions, bootstrap configs, `installSpec`, users. Rebuilt in Phase 3. |
+| nixos-config | `~/src/config` | `git@github.com:JulianKragt/nixos-config.git` | Source of host definitions, bootstrap configs, `hostSpec`, users. Rebuilt in Phase 3. |
 | nix-secrets | `~/src/nix-secrets` | `git@github.com:JulianKragt/nix-secrets.git` (private) | `.sops.yaml` recipients + encrypted YAML. Written in Phase 2. |
 | installer | `~/src/installer` | none (not a git repo yet) | Go module `installer`, Go 1.27. Replaces `config/scripts/install-host.sh`. |
 
 `~/src/reference/` holds two third-party configs (EmergentMind, vimjoyer) used as inspiration only.
 
-**Predecessor:** `config/scripts/install-host.sh` (+ `just install|enroll-sops|deploy-remote`) already implements an older version of this flow in bash. It is the best spec for the "how"; the Pipeline doc is the spec for the "what". Note: `config` has *staged, uncommitted* changes to `install-host.sh`, `install-spec.nix`, `secrets.nix`, `README.md`.
+**Predecessor:** `config/scripts/install-host.sh` (+ `just install|enroll-sops|deploy-remote`) already implements an older version of this flow in bash. It is the best spec for the "how"; the Pipeline doc is the spec for the "what". Note: `config` has *staged, uncommitted* changes to `install-host.sh`, `provision-spec.nix`, `secrets.nix`, `README.md`.
+
+---
+
+## Users — one way to add or remove
+
+The users on a host are the files `home/<u>/<host>.nix` (`usersForHost` in `config/lib/helpers.nix` → `accounts.activeUsers`). Per-user policy lives in `accounts.users.<u>` (full config; today only `secrets`, default true). Install behaviour (hardware generation, SOPS enrollment, deploy, timeouts) is installer flags, not Nix.
+
+- **Add**: create `home/<u>/<host>.nix` (+ `accounts/<u>/keys` if new to the repo), commit. **Delete**: remove the file, commit.
+- **Apply**: `installer secrets --host <h> --target <ip>`. First install runs the same reconcile as later changes.
+- **Reconcile** = `accounts.users` (read with `nix eval --json .#nixosConfigurations.<h>.config.accounts.users`) vs. state and `host-users/*`: add recipient + author `host-users/<h>-<u>.yaml` + commit/push for new users; prune file and recipient for removed users; then rebuild. The secret file must exist before the rebuild (`mutableUsers = false`).
+- Not supported: `useradd`/`userdel` on the box; hand-editing recipients to add a user.
+- Kinds: primary admin and additional human users (password + keys + Home Manager), shared login account (`media`, sops password), service users (`isSystemUser`, from service modules, invisible to the installer), operator/root key lists (`accounts/super/keys`, not accounts).
 
 ---
 
@@ -30,34 +42,27 @@ Snapshot taken 2026-10-08 from `~/src/{config,nix-secrets,installer}`.
 ### Flake shape
 - flake-parts "dendritic" layout; every fragment is listed explicitly in `imports.nix` (new host files must be added there).
 - Each NixOS host exposes **two** outputs:
-  - `nixosConfigurations.<host>-bootstrap` → `hosts/nixos/<host>/bootstrap.nix` (minimal: install-spec + openssh + disko + hardware-config)
+  - `nixosConfigurations.<host>-bootstrap` → `hosts/nixos/<host>/bootstrap.nix` (minimal: bootstrap-base + host-<h>-spec + openssh + disko + hardware-config)
   - `nixosConfigurations.<host>` → full system (host-spec, core/sops, users, home-manager…)
 - Host is a valid install target iff `hosts/nixos/<host>/bootstrap.nix` exists.
 - Hosts today: `atlas` (NixOS workstation, `/dev/nvme0n1`, already installed once), `broadway` (NixOS server, disk still `REPLACE_ME`, users jkragt + media), `workhorse` (darwin), `wsl`.
 
-### `installSpec` (modules/install-spec.nix) — install policy per host
-Read with `nix eval --json .#nixosConfigurations.<host>-bootstrap.config.installSpec`.
+### Host discovery (modules/bootstrap-base.nix)
+`provisionSpec` was removed. `nix eval --json .#installHosts` returns, per host, `{ hostSpec, disk, users }`; `hostSpec` is the same option set as the full config (`hostName`, `primaryUser`, `role`, `timeZone`, `stateVersion`, …). The former install-policy options now live in the installer:
 
-| Option | Default | Use in pipeline |
-|---|---|---|
-| `hostName`, `primaryUser`, `timeZone`, `stateVersion` | – / – / Europe/Amsterdam / 25.11 | Identity; root authorized_keys come from `accounts/<primaryUser>/keys` + `accounts/super/keys` |
-| `generateHardware` | true | `nixos-anywhere --generate-hardware-config nixos-generate-config <path>` → commit in config |
-| `hardwareConfigPath` | `hardware-configuration.nix` | relative to `hosts/nixos/<host>/` |
-| `enrollSops` | true | Phase 1–2 gate |
-| `provisionUserAgeKey` | true | Legacy: streams operator age key to target (see §6.2 — likely obsolete) |
-| `pushSecrets` | true | Stage 2.4 gate |
-| `deployFullConfig` | true | Stage 3.2 gate |
-| `nixSecretsPath` | `../nix-secrets` | Provider-side path (legacy flow edits secrets on provider) |
-| `sshWaitTimeout` | 600 (atlas: 500) | Stage 0.2 SSH wait |
-| `luksPasswordFile` | `/tmp/disko-password` | Where disko reads the LUKS passphrase on the install ISO |
-| `nixosAnywhereExtra` | `[]` | Extra flags for nixos-anywhere |
+| Former option | Now |
+|---|---|
+| `generateHardware`, `hardwareConfigPath` | flag / file-exists check; path is `hosts/nixos/<host>/hardware-configuration.nix` |
+| `luksPasswordFile` | fixed `/tmp/disko-password` (matches `disko.nix`) |
+| `enrollSops`, `pushSecrets`, `deployFullConfig`, `sshWaitTimeout`, `nixosAnywhereExtra`, `nixSecretsPath` | installer flags with defaults |
+| `provisionUserAgeKey` | dropped (obsolete, see §6.2) |
 
 The bootstrap config also sets systemd-boot and root SSH keys. It does **not** currently include git / sops / age / ssh-to-age / vim (required by Pipeline Stage 0.1 and 1.2).
 
 ### Other useful evaluations
 - Disk: `nix eval --raw .#nixosConfigurations.<host>-bootstrap.config.disko.devices.disk.main.device` — fail if it contains `REPLACE_ME`.
 - Users on a host: a user lives on host iff `home/<user>/<host>.nix` exists. Authoritative: `nix eval --json .#nixosConfigurations.<host>.config.accounts.activeUsers`.
-- Primary user: `hostSpec.primaryUser` (full config) / `installSpec.primaryUser` (bootstrap).
+- Primary user: `hostSpec.primaryUser` (full config) / same option on the bootstrap config.
 
 ### Disk / boot facts that affect the flow
 - Disko layout: GPT, 1G ESP, **LUKS** (`cryptroot`) → btrfs subvolumes `@root @home @nix @swap`. Passphrase file `/tmp/disko-password` must exist on the ISO before nixos-anywhere runs.
@@ -130,6 +135,7 @@ Bugs / gaps found:
 
 | Pipeline stage | Runs on | Legacy `install-host.sh` equivalent | Port notes |
 |---|---|---|---|
+| 0.0 Environment preparation | provider (+target `lsblk`) | `eval_spec`, arg parsing, tool/disk resolution | Always runs (not recorded in `CompletedStages`). Checks `nix ssh git nc`, config flake + `bootstrap.nix`, SSH key; disk from `--disk` or detected on target (largest non-removable disk). |
 | 0.1 Provider preparation | provider | `eval_spec`, preflight: nix-secrets present, disk not `REPLACE_ME`, ping, `ssh root@ip`, remote `nix`/`lsblk`/internet check, `test -b $DEVICE`, show `lsblk`, type "install", LUKS prompt → `/tmp/disko-password` | Keep the typed confirmation + lsblk display. Stream the LUKS pass via stdin, never argv. Use a TCP dial instead of ping. |
 | 0.2 Base install | provider → target | `nix run github:nix-community/nixos-anywhere -- [--generate-hardware-config …] --build-on-remote --flake .#<host>-bootstrap --target-host root@ip`; commit hardware config; skip if `/run/current-system` exists | Then wait for SSH (`sshWaitTimeout`, poll 5s), TOFU then pin ed25519 host key → state. |
 | 1.1 Host identity | target | `cat /etc/ssh/ssh_host_ed25519_key.pub \| ssh-to-age` (run on provider) | Can be done in Go with `github.com/Mic92/ssh-to-age` (library) — no tool needed. Store recipient + fingerprint in state. |
@@ -183,7 +189,7 @@ A reinstall generates a new host key, so `&host_<host>` changes and the old `hos
 - `shared.yaml` is encrypted to the user only, so the target can **not** `updatekeys` it (the bash script did, from the provider). Either keep shared-secret rekeying as a provider-side step or drop it from the target flow.
 
 ### 6.8 Bootstrap config additions
-Add to the bootstrap module (or `installSpec`): `git`, `sops`, `age`, `ssh-to-age`, `vim`, and whatever runtime the installer needs on the target (if the Go binary itself runs there, either `nix run` it from a flake or `scp` a static `GOOS=linux` build).
+Add to the bootstrap module : `git`, `sops`, `age`, `ssh-to-age`, `vim`, and whatever runtime the installer needs on the target (if the Go binary itself runs there, either `nix run` it from a flake or `scp` a static `GOOS=linux` build).
 
 ### 6.9 Housekeeping spotted
 - `hosts/nixos/atlas/default.nix` sets `users.users.root.initialPassword = "test"` in the full config — remove.
@@ -198,5 +204,5 @@ Add to the bootstrap module (or `installSpec`): `git`, `sops`, `age`, `ssh-to-ag
 - **Stage IDs**: use string IDs matching the Pipeline (`"0.1"`, `"2.3"`…) or keep `int` but map 1:1 and document it; resume = first stage not in `CompletedStages`.
 - **Executors**: `Local` + `SSH` (target) sharing one interface; options for stdin (`io.Reader`, for secrets), env, dir, streamed output to the logger, and an interactive mode (`ssh -t`, attach os.Stdin/Stdout, stop the spinner first) for vim.
 - **Adapters** to add: `nix eval --json`, `nixos-anywhere`, `ssh`/`ssh-keyscan`, `git`, `sops`, `nixos-rebuild`. Do ssh→age conversion and `.sops.yaml` editing in-process.
-- **CLI**: `install --host --target` (full) and `secrets --host --target` (Phase 2–3 resume, as in Pipeline 4.2); flags for `--verbose`, `--config`, `--state-dir`.
+- **CLI** (implemented in `internal/cli`): `--target` (required), `--host` (picked from `hosts/nixos/*/bootstrap.nix` when empty), `--config` (default `./`), `--disk` (detected when empty), `--verbose`. Planned: `install --host --target` (full) and `secrets --host --target` (Phase 2–3 resume, as in Pipeline 4.2); flags for `--verbose`, `--config`, `--state-dir`.
 - **Secrets hygiene**: never put secrets in argv or logs (bash script already follows this — keep it), always `umask 077` on target, cleanup in a deferred step even on failure.

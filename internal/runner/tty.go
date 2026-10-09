@@ -31,6 +31,9 @@ func (l *Runner) draw() {
 // drawLocked commits finished roots and writes them, plus (on a terminal)
 // the live area, in a single Write.
 func (l *Runner) drawLocked() {
+	if l.suspended {
+		return
+	}
 	l.commitLocked()
 
 	if !l.tty {
