@@ -1,8 +1,8 @@
-// Package log keeps a tree of tasks in memory and renders it as a live area
+// Package runner keeps a tree of tasks in memory and renders it as a live area
 // on the terminal. The current task travels in a context.Context, so nested
-// and parallel code logs under the correct parent without passing a logger
+// and parallel code runs under the correct parent without passing a runner
 // around.
-package log
+package runner
 
 import (
 	"context"
@@ -25,7 +25,7 @@ const (
 	LevelError
 )
 
-// Options configures a Logger.
+// Options configures a Runner.
 type Options struct {
 	// Out receives the rendered tree. A terminal gets a live area with
 	// colors; anything else only gets finished blocks, without escapes.
@@ -39,8 +39,8 @@ type Options struct {
 
 const tickInterval = 80 * time.Millisecond
 
-// Logger owns the task tree of one run.
-type Logger struct {
+// Runner owns the task tree of one run.
+type Runner struct {
 	mu      sync.Mutex
 	out     io.Writer
 	file    *fileSink
@@ -65,8 +65,8 @@ type Logger struct {
 	once sync.Once
 }
 
-// New creates a Logger. Close must be called before the process exits.
-func New(opts Options) *Logger {
+// New creates a Runner. Close must be called before the process exits.
+func New(opts Options) *Runner {
 	var tty bool
 	var size func() (int, int)
 	if f, ok := opts.Out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
@@ -80,7 +80,7 @@ func New(opts Options) *Logger {
 		}
 	}
 
-	l := newLogger(opts, tty, size)
+	l := newRunner(opts, tty, size)
 	if tty {
 		l.wg.Add(1)
 		go l.tick()
@@ -88,8 +88,8 @@ func New(opts Options) *Logger {
 	return l
 }
 
-func newLogger(opts Options, tty bool, size func() (int, int)) *Logger {
-	l := &Logger{
+func newRunner(opts Options, tty bool, size func() (int, int)) *Runner {
+	l := &Runner{
 		out:     opts.Out,
 		verbose: opts.Verbose,
 		now:     time.Now,
@@ -109,7 +109,7 @@ func newLogger(opts Options, tty bool, size func() (int, int)) *Logger {
 	return l
 }
 
-func (l *Logger) tick() {
+func (l *Runner) tick() {
 	defer l.wg.Done()
 	t := time.NewTicker(tickInterval)
 	defer t.Stop()
@@ -125,7 +125,7 @@ func (l *Logger) tick() {
 
 // Close stops the ticker, ends tasks that are still running, draws a final
 // time and restores the cursor. It must run before os.Exit.
-func (l *Logger) Close() error {
+func (l *Runner) Close() error {
 	l.once.Do(func() {
 		close(l.stop)
 		l.wg.Wait()
@@ -150,7 +150,7 @@ func (l *Logger) Close() error {
 }
 
 // write sends s to Out. Caller must hold l.mu.
-func (l *Logger) write(s string) {
+func (l *Runner) write(s string) {
 	if _, err := io.WriteString(l.out, s); err != nil && l.writeErr == nil {
 		l.writeErr = err
 	}
@@ -158,7 +158,7 @@ func (l *Logger) write(s string) {
 
 // afterEvent redraws immediately when no ticker is going to do it.
 // Caller must hold l.mu.
-func (l *Logger) afterEvent() {
+func (l *Runner) afterEvent() {
 	if !l.tty || l.closed {
 		l.drawLocked()
 	}
@@ -167,13 +167,13 @@ func (l *Logger) afterEvent() {
 type ctxKey struct{}
 
 type ctxVal struct {
-	l *Logger
+	l *Runner
 	n *node
 }
 
 // NewContext returns a context that carries l. Without a logger in the
 // context, all calls in this package are no-ops.
-func NewContext(ctx context.Context, l *Logger) context.Context {
+func NewContext(ctx context.Context, l *Runner) context.Context {
 	return context.WithValue(ctx, ctxKey{}, &ctxVal{l: l})
 }
 

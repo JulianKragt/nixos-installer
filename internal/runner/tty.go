@@ -1,4 +1,4 @@
-package log
+package runner
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ type line struct {
 }
 
 // draw redraws the live area. The ticker calls it every tickInterval.
-func (l *Logger) draw() {
+func (l *Runner) draw() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.drawLocked()
@@ -30,7 +30,7 @@ func (l *Logger) draw() {
 
 // drawLocked commits finished roots and writes them, plus (on a terminal)
 // the live area, in a single Write.
-func (l *Logger) drawLocked() {
+func (l *Runner) drawLocked() {
 	l.commitLocked()
 
 	if !l.tty {
@@ -69,7 +69,7 @@ func (l *Logger) drawLocked() {
 
 // commitLocked moves finished roots into the pending output, in start order.
 // A root is only committed once every root before it is.
-func (l *Logger) commitLocked() {
+func (l *Runner) commitLocked() {
 	for l.committed < len(l.roots) && l.roots[l.committed].finished() {
 		r := l.roots[l.committed]
 		var lines []line
@@ -85,7 +85,7 @@ func (l *Logger) commitLocked() {
 
 // liveRender renders the roots that are not committed yet, cut to the
 // terminal size. Caller must hold l.mu.
-func (l *Logger) liveRender() []string {
+func (l *Runner) liveRender() []string {
 	var lines []line
 	now := l.now()
 	for _, r := range l.roots[l.committed:] {
@@ -108,7 +108,7 @@ func (l *Logger) liveRender() []string {
 }
 
 // collect appends the rows for n and everything below it.
-func (l *Logger) collect(n *node, depth int, now time.Time, live bool, out *[]line) {
+func (l *Runner) collect(n *node, depth int, now time.Time, live bool, out *[]line) {
 	if n.kind == kindLog {
 		sym, col := logStyle(n.level, depth == 0)
 		*out = append(*out, line{depth: depth, sym: sym, color: col, text: n.title})

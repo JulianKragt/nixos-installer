@@ -1,4 +1,4 @@
-package log
+package runner
 
 import (
 	"bytes"
@@ -90,7 +90,7 @@ func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 type harness struct {
 	buf bytes.Buffer
-	l   *Logger
+	l   *Runner
 	clk *clock
 	ctx context.Context
 }
@@ -98,7 +98,7 @@ type harness struct {
 func newTTY(t *testing.T, w, h int, verbose bool) *harness {
 	t.Helper()
 	hn := &harness{clk: &clock{t: time.Date(2026, 1, 1, 15, 12, 3, 0, time.UTC)}}
-	hn.l = newLogger(Options{Out: &hn.buf, Verbose: verbose}, true, func() (int, int) { return w, h })
+	hn.l = newRunner(Options{Out: &hn.buf, Verbose: verbose}, true, func() (int, int) { return w, h })
 	hn.l.now = hn.clk.now
 	hn.ctx = NewContext(context.Background(), hn.l)
 	return hn
@@ -301,7 +301,7 @@ func TestColorsOnTTY(t *testing.T) {
 
 func TestNonTTY(t *testing.T) {
 	var buf bytes.Buffer
-	l := newLogger(Options{Out: &buf}, false, nil)
+	l := newRunner(Options{Out: &buf}, false, nil)
 	ctx := NewContext(context.Background(), l)
 	ctx1, a := Start(ctx, "A")
 	_, b := Start(ctx, "B")
@@ -325,7 +325,7 @@ func TestCloseEndsRunningTasks(t *testing.T) {
 	if err := h.l.Close(); err != nil {
 		t.Fatal(err)
 	}
-	eq(t, squash(h.screen()), []string{"✗ left running (logger closed) 0ms"})
+	eq(t, squash(h.screen()), []string{"✗ left running (runner closed) 0ms"})
 }
 
 func TestDebugHiddenUnlessVerbose(t *testing.T) {
@@ -347,7 +347,7 @@ func TestDebugHiddenUnlessVerbose(t *testing.T) {
 	}
 }
 
-func TestNoLoggerIsNoop(t *testing.T) {
+func TestNoRunnerIsNoop(t *testing.T) {
 	ctx := context.Background()
 	Info(ctx, "x")
 	ctx, task := Start(ctx, "t")
@@ -367,7 +367,7 @@ func TestNoLoggerIsNoop(t *testing.T) {
 
 func TestEndFailureMessage(t *testing.T) {
 	var buf bytes.Buffer
-	l := newLogger(Options{Out: &buf}, false, nil)
+	l := newRunner(Options{Out: &buf}, false, nil)
 	ctx := NewContext(context.Background(), l)
 	err := Run(ctx, "Disk", func(context.Context) error { return errors.New("no space\nleft") })
 	if err == nil || !strings.Contains(buf.String(), "✗ Disk: no space; left") {
@@ -377,7 +377,7 @@ func TestEndFailureMessage(t *testing.T) {
 
 func TestParallelCancelsSiblingsAndJoinsErrors(t *testing.T) {
 	var buf bytes.Buffer
-	l := newLogger(Options{Out: &buf}, false, nil)
+	l := newRunner(Options{Out: &buf}, false, nil)
 	ctx := NewContext(context.Background(), l)
 
 	var mu sync.Mutex
@@ -420,7 +420,7 @@ func TestParallelCancelsSiblingsAndJoinsErrors(t *testing.T) {
 
 func TestParallelRace(t *testing.T) {
 	var buf bytes.Buffer
-	l := newLogger(Options{Out: &buf, File: &syncBuf{}}, false, nil)
+	l := newRunner(Options{Out: &buf, File: &syncBuf{}}, false, nil)
 	ctx := NewContext(context.Background(), l)
 	steps := make([]Step, 20)
 	for i := range steps {

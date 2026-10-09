@@ -5,7 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"installer/internal/command/executor"
-	"installer/internal/log"
+	"installer/internal/runner"
 	"installer/internal/pipeline"
 	"installer/internal/stage"
 	"installer/internal/stages"
@@ -37,7 +37,7 @@ func run() int {
 		Target:   "192.168.1.100",
 	}
 
-	opts := log.Options{Out: os.Stderr, Verbose: *verbose}
+	opts := runner.Options{Out: os.Stderr, Verbose: *verbose}
 	logPath, logFile, err := openLogFile(st.HostName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: no log file: %v\n", err)
@@ -46,8 +46,8 @@ func run() int {
 		opts.File = logFile
 	}
 
-	logger := log.New(opts)
-	ctx = log.NewContext(ctx, logger)
+	logger := runner.New(opts)
+	ctx = runner.NewContext(ctx, logger)
 
 	env := &stage.Env{State: st, Local: executor.NewLocal()}
 	p := pipeline.New([]stage.Stage{stages.ProviderPreparationStage{}}, env)
@@ -63,7 +63,7 @@ func run() int {
 	return 0
 }
 
-// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/<host>-<time>.log.
+// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/<host>-<time>.runner.
 func openLogFile(host string) (string, *os.File, error) {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {

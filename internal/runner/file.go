@@ -1,4 +1,4 @@
-package log
+package runner
 
 import (
 	"fmt"
@@ -14,7 +14,7 @@ type fileSink struct {
 }
 
 // fileEvent records an event for n in the log file. Caller must hold l.mu.
-func (l *Logger) fileEvent(sym string, n *node, msg string) {
+func (l *Runner) fileEvent(sym string, n *node, msg string) {
 	if l.file == nil {
 		return
 	}

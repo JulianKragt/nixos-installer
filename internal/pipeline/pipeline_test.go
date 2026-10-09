@@ -3,7 +3,7 @@ package pipeline
 import (
 	"bytes"
 	"context"
-	"installer/internal/log"
+	"installer/internal/runner"
 	"installer/internal/stage"
 	"installer/internal/state"
 	"strings"
@@ -32,7 +32,7 @@ func TestRunsOnlyPendingStagesInOrder(t *testing.T) {
 		fakeStage{2, "b", &ran},
 	}
 	var out bytes.Buffer
-	ctx := log.NewContext(context.Background(), log.New(log.Options{Out: &out}))
+	ctx := runner.NewContext(context.Background(), runner.New(runner.Options{Out: &out}))
 	p := New(stages, &stage.Env{State: &state.State{StageIndex: 1}})
 	if err := p.Run(ctx); err != nil {
 		t.Fatal(err)

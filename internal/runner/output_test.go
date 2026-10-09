@@ -1,4 +1,4 @@
-package log
+package runner
 
 import (
 	"bytes"
@@ -72,7 +72,7 @@ func TestFailureKeepsLastTwentyLines(t *testing.T) {
 func TestFileSink(t *testing.T) {
 	var out bytes.Buffer
 	f := &syncBuf{}
-	l := newLogger(Options{Out: &out, File: f}, false, nil)
+	l := newRunner(Options{Out: &out, File: f}, false, nil)
 	clk := &clock{}
 	clk.t = clk.t.Add(15*time.Hour + 12*time.Minute + 3*time.Second + 501*time.Millisecond)
 	l.now = clk.now

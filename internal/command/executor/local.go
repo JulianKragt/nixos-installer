@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"installer/internal/command"
-	"installer/internal/log"
+	"installer/internal/runner"
 	"io"
 	"os/exec"
 )
@@ -25,7 +25,7 @@ func (e *Local) Run(ctx context.Context, cmd command.Command) command.Result {
 	var output bytes.Buffer
 
 	// One writer for both streams, so exec serializes the writes.
-	w := io.MultiWriter(&output, log.Output(ctx))
+	w := io.MultiWriter(&output, runner.Output(ctx))
 	process.Stdout = w
 	process.Stderr = w
 

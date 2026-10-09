@@ -1,4 +1,4 @@
-package log
+package runner
 
 import (
 	"context"
@@ -28,7 +28,7 @@ const tailKept = 20
 
 var (
 	errParentEnded = errors.New("parent ended")
-	errClosed      = errors.New("logger closed")
+	errClosed      = errors.New("runner closed")
 )
 
 // node is a task or a log line. Command output lives in a task's tail.
@@ -89,7 +89,7 @@ func (n *node) finished() bool {
 // Task is a handle on a running task. It only handles lifecycle; logging
 // goes through the context returned by Start.
 type Task struct {
-	l *Logger
+	l *Runner
 	n *node
 }
 
@@ -174,7 +174,7 @@ func (t *Task) finish(err error, failed bool) {
 }
 
 // endLocked finishes n and closes tasks still running below it as failed.
-func (l *Logger) endLocked(n *node, err error) {
+func (l *Runner) endLocked(n *node, err error) {
 	if n.state != stateRunning {
 		return
 	}
@@ -213,13 +213,13 @@ func failedTitle(n *node) string {
 	case errors.Is(n.err, errParentEnded):
 		return n.title + " (parent ended)"
 	case errors.Is(n.err, errClosed):
-		return n.title + " (logger closed)"
+		return n.title + " (runner closed)"
 	}
 	return n.title + ": " + oneLine(n.err.Error())
 }
 
 // logLocked records a log line under n (or at the root if n is nil).
-func (l *Logger) logLocked(n *node, level Level, msg string) {
+func (l *Runner) logLocked(n *node, level Level, msg string) {
 	sym := "•"
 	switch level {
 	case LevelInfo:
@@ -247,7 +247,7 @@ func (l *Logger) logLocked(n *node, level Level, msg string) {
 }
 
 // emitCommitted prints a single node straight away at its depth.
-func (l *Logger) emitCommitted(n *node) {
+func (l *Runner) emitCommitted(n *node) {
 	var lines []line
 	l.collect(n, n.depth(), l.now(), false, &lines)
 	for _, s := range renderLines(lines, 0, l.tty) {

@@ -1,4 +1,4 @@
-package log
+package runner
 
 import (
 	"context"
@@ -12,7 +12,7 @@ const maxLineBytes = 64 << 10
 // partial line, lets \r reset the current line (progress bars) and strips
 // ANSI and control characters. Its state is guarded by the logger's mutex.
 type outputWriter struct {
-	l   *Logger
+	l   *Runner
 	n   *node // nil: root level, file only
 	buf []byte
 	cr  bool
