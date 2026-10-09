@@ -18,6 +18,9 @@ import (
 )
 
 // SSH runs commands on a remote host over SSH using public-key authentication.
+// DefaultSSHPort is used when SSH.Host carries no port.
+const DefaultSSHPort = "22"
+
 type SSH struct {
 	Host    string // "host" or "host:port" — defaults to port 22
 	User    string
@@ -67,7 +70,7 @@ func (e *SSH) Run(ctx context.Context, cmd command.Command, opts ExecOptions) (c
 
 	host := e.Host
 	if _, _, err := net.SplitHostPort(host); err != nil {
-		host = net.JoinHostPort(host, "22")
+		host = net.JoinHostPort(host, DefaultSSHPort)
 	}
 
 	client, err := ssh.Dial("tcp", host, config)

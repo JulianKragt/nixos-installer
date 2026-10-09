@@ -30,10 +30,15 @@ func (*EnvironmentPreparationStage) ID() string      { return "0.0" }
 func (*EnvironmentPreparationStage) Name() string    { return "Environment preparation" }
 func (*EnvironmentPreparationStage) AlwaysRun() bool { return true }
 
+// asker binds prompts to the runner's input so they render above the live area.
+func (s *EnvironmentPreparationStage) asker(ctx context.Context) cli.Asker {
+	return func(prompt string) (string, error) { return runner.Ask(ctx, s.In, prompt) }
+}
+
 // resolve asks for whatever the flags left empty (target, host), then loads
 // the persisted state of the chosen host, since state is keyed by host name.
 func (s *EnvironmentPreparationStage) resolve(ctx context.Context, env *stage.Env) error {
-	ask := func(prompt string) (string, error) { return runner.Ask(ctx, s.In, prompt) }
+	ask := s.asker(ctx)
 	if err := s.Opts.CompleteTarget(ask); err != nil {
 		return err
 	}
@@ -51,7 +56,7 @@ func (s *EnvironmentPreparationStage) resolve(ctx context.Context, env *stage.En
 	}
 	*env.State = *st
 	env.State.Target = s.Opts.TargetIP
-	s.Remote.Host = net.JoinHostPort(s.Opts.TargetIP, "22")
+	s.Remote.Host = net.JoinHostPort(s.Opts.TargetIP, executor.DefaultSSHPort)
 	runner.Info(ctx, "Target: "+s.Opts.TargetIP)
 	runner.Info(ctx, "Host: "+host)
 	return nil
@@ -65,7 +70,7 @@ func (s *EnvironmentPreparationStage) Run(ctx context.Context, env *stage.Env) e
 	}
 
 	if err := runner.Run(ctx, "Check target is reachable", func(ctx context.Context) error {
-		return commands.DialTCP(ctx, env.Local, net.JoinHostPort(env.State.Target, "22"))
+		return commands.DialTCP(ctx, env.Local, net.JoinHostPort(env.State.Target, executor.DefaultSSHPort))
 	}); err != nil {
 		return err
 	}
@@ -179,8 +184,7 @@ func (s *EnvironmentPreparationStage) chooseDisk(ctx context.Context, candidates
 	for i, d := range candidates {
 		items[i] = d.String()
 	}
-	i, err := cli.Choose(func(prompt string) (string, error) { return runner.Ask(ctx, s.In, prompt) },
-		"Select the install disk:", items)
+	i, err := cli.Choose(s.asker(ctx), "Select the install disk:", items)
 	if err != nil {
 		return "", fmt.Errorf("%w (or pass --disk)", err)
 	}

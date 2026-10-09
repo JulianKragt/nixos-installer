@@ -44,7 +44,7 @@ func run() int {
 		return 2
 	}
 
-	stateDir := xdgStateDir("nixos-installer")
+	stateDir := appStateDir()
 	st := &state.State{}
 
 	logOpts := runner.Options{Out: os.Stderr, Verbose: opts.Verbose}
@@ -84,6 +84,9 @@ func run() int {
 	return 0
 }
 
+// appStateDir is the installer's state directory.
+func appStateDir() string { return xdgStateDir("nixos-installer") }
+
 // xdgStateDir returns ${XDG_STATE_HOME:-~/.local/state}/<app>.
 func xdgStateDir(app string) string {
 	base := os.Getenv("XDG_STATE_HOME")
@@ -99,7 +102,7 @@ func xdgStateDir(app string) string {
 
 // openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/install-<time>.log.
 func openLogFile() (string, *os.File, error) {
-	dir := filepath.Join(xdgStateDir("nixos-installer"), "logs")
+	dir := filepath.Join(appStateDir(), "logs")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", nil, err
 	}

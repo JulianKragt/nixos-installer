@@ -1,4 +1,5 @@
-// Package cli implements the top-level subcommands: install and secrets.
+// Package cli parses the command-line options and implements the interactive
+// prompts (target, host) that complete them.
 package cli
 
 import (
@@ -60,12 +61,22 @@ func validateTarget(s string) error {
 // Asker shows prompt and returns the operator's answer.
 type Asker func(prompt string) (string, error)
 
+// answer asks prompt and returns the line. A read error is reported only when
+// nothing was read, so a final unterminated line still counts as an answer.
+func answer(ask Asker, prompt string) (string, error) {
+	line, err := ask(prompt)
+	if line == "" && err != nil {
+		return "", err
+	}
+	return line, nil
+}
+
 // CompleteTarget asks for the target IP when it is still empty, until it is valid.
 func (o *Options) CompleteTarget(ask Asker) error {
 	prompt := "Target IP address: "
 	for o.TargetIP == "" {
-		line, err := ask(prompt)
-		if line == "" && err != nil {
+		line, err := answer(ask, prompt)
+		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return errors.New("--target is required")
 			}
@@ -133,8 +144,8 @@ func Choose(ask Asker, header string, items []string) (int, error) {
 		fmt.Fprintf(&b, "  %d) %s\n", i+1, it)
 	}
 	b.WriteString("Number: ")
-	line, err := ask(b.String())
-	if line == "" && err != nil {
+	line, err := answer(ask, b.String())
+	if err != nil {
 		return 0, fmt.Errorf("read selection: %w", err)
 	}
 	n, err := strconv.Atoi(line)
