@@ -15,6 +15,7 @@ import (
 type fakeTerm struct {
 	rows [][]rune
 	r, c int
+	cols int // wrap at this column; 0 = never
 }
 
 func (t *fakeTerm) row() *[]rune {
@@ -58,6 +59,10 @@ func (t *fakeTerm) write(s string) {
 				}
 			}
 		default:
+			if t.cols > 0 && t.c == t.cols {
+				t.r++
+				t.c = 0
+			}
 			row := t.row()
 			for len(*row) < t.c {
 				*row = append(*row, ' ')
@@ -89,10 +94,11 @@ func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 type harness struct {
-	buf bytes.Buffer
-	l   *Runner
-	clk *clock
-	ctx context.Context
+	buf  bytes.Buffer
+	l    *Runner
+	clk  *clock
+	ctx  context.Context
+	wrap int // screen() wraps at this column; 0 = never
 }
 
 func newTTY(t *testing.T, w, h int, verbose bool) *harness {
@@ -105,7 +111,7 @@ func newTTY(t *testing.T, w, h int, verbose bool) *harness {
 }
 
 func (h *harness) screen() []string {
-	var ft fakeTerm
+	ft := fakeTerm{cols: h.wrap}
 	ft.write(h.buf.String())
 	return ft.screen()
 }
@@ -254,6 +260,27 @@ func TestLogAfterCommit(t *testing.T) {
 	late.Done()
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ Task 0ms", "  ⚠ late", "  ✓ late task 0ms"})
+}
+
+func TestLateTaskIsLiveUntilItEnds(t *testing.T) {
+	h := newTTY(t, 80, 24, false)
+	ctx, task := Start(h.ctx, "Task")
+	task.Done()
+	h.l.draw()
+
+	ctx, late := Start(ctx, "late task")
+	Info(ctx, "inside")
+	h.l.draw()
+	eq(t, squash(h.screen()), []string{"✓ Task 0ms", "  ⠙ late task", "    → inside"})
+
+	late.Done()
+	h.l.draw()
+	Info(ctx, "after")
+	h.l.draw()
+	eq(t, squash(h.screen()), []string{"✓ Task 0ms", "  ✓ late task 0ms", "    → inside", "    → after"})
+	if h.l.liveLines != 0 {
+		t.Fatalf("liveLines = %d, want 0", h.l.liveLines)
+	}
 }
 
 func TestElapsedAfterOneSecond(t *testing.T) {

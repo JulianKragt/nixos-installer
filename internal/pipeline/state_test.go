@@ -1,0 +1,64 @@
+package pipeline
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestLoadMissingReturnsFreshState(t *testing.T) {
+	st, err := LoadState(t.TempDir(), "atlas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Host != "atlas" || len(st.Completed) != 0 {
+		t.Errorf("state: %+v", st)
+	}
+}
+
+func TestSaveLoadRoundTrip(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested")
+	want, err := LoadState(dir, "atlas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Disk = "/dev/vda"
+	want.Completed = []string{"1.0"}
+	if err := want.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadState(dir, "atlas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	if want.Path() != filepath.Join(dir, "atlas.json") {
+		t.Errorf("path = %s", want.Path())
+	}
+	info, err := os.Stat(want.Path())
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("state file: %v, %v", info, err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("temp file left behind: %v", entries)
+	}
+}
+
+func TestLoadCorruptFileFails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "atlas.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(dir, "atlas"); err == nil {
+		t.Error("want error for corrupt state")
+	}
+}
+
+func TestSaveWithoutFileFails(t *testing.T) {
+	if err := (&State{Host: "atlas"}).Save(); err == nil {
+		t.Error("a State that was not loaded has nowhere to save to")
+	}
+}

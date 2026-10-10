@@ -10,7 +10,7 @@ const maxLineBytes = 64 << 10
 
 // outputWriter splits command output into lines for a task. It buffers a
 // partial line, lets \r reset the current line (progress bars) and strips
-// ANSI and control characters. Its state is guarded by the logger's mutex.
+// ANSI and control characters. Its state is guarded by the runner's mutex.
 type outputWriter struct {
 	l   *Runner
 	n   *node // nil: root level, file only
@@ -19,7 +19,7 @@ type outputWriter struct {
 }
 
 // Output returns a writer for command output belonging to ctx's task. It
-// returns io.Discard when ctx has no logger.
+// returns io.Discard when ctx has no runner.
 func Output(ctx context.Context) io.Writer {
 	v := from(ctx)
 	if v == nil {

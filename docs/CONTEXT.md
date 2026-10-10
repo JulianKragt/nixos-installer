@@ -17,7 +17,7 @@ Snapshot taken 2026-10-08 from `~/src/{config,nix-secrets,installer}`.
 |---|---|---|---|
 | nixos-config | `~/src/config` | `git@github.com:JulianKragt/nixos-config.git` | Source of host definitions, bootstrap configs, `hostSpec`, users. Rebuilt in Phase 3. |
 | nix-secrets | `~/src/nix-secrets` | `git@github.com:JulianKragt/nix-secrets.git` (private) | `.sops.yaml` recipients + encrypted YAML. Written in Phase 2. |
-| installer | `~/src/installer` | none (not a git repo yet) | Go module `installer`, Go 1.27. Replaces `config/scripts/install-host.sh`. |
+| installer | `~/src/installer` | `git@github.com:JulianKragt/nixos-installer.git` | Go module `installer`, Go 1.27. Replaces `config/scripts/install-host.sh`. |
 
 `~/src/reference/` holds two third-party configs (EmergentMind, vimjoyer) used as inspiration only.
 
@@ -109,25 +109,41 @@ Problems found. Julian is fixing them in the migration to pipeline paths; they a
 ## 4. Installer (Go) — current state
 
 ```
-cmd/nixos-installer/main.go          builds []Stage{ProviderPreparationStage}, hardcoded host=atlas target=192.168.1.100
-internal/pipeline/pipeline.go        sorts by Index(), skips Index <= state.StageIndex, runs stages
-internal/stage/stage.go              interface { Index() int; Name() string; Run(ctx,*State) error; Rollback(ctx,*State) error }
-internal/stages/01_provider_preparation.go   pings google.com via local executor
-internal/state/state.go              HostName, Target, Stage, StageIndex, HostRecipient, SecretsCommit, Converged
-internal/command/{command.go,result.go}       Command{Name,Args}, Result{Output,ExitCode,Err}
-internal/command/executor/{executor.go,local.go}  Executor.Run(ctx,cmd) via os/exec, stdout+stderr merged into a buffer
-internal/command/adapter/ping.go     ping -c 1 <host>
-internal/log/                        live task-tree logger, see docs/LOG.md (replaced internal/logger)
-internal/cli/bootstrap.go            empty
+cmd/nixos-installer/     main.go    signals, log file, runner, wiring
+                         flags.go   --target --host --config --disk --verbose
+                         inputs.go  asks for what the flags left empty, loads the host's state
+cmd/logdemo/             shows the look of the runner (dev only)
+internal/runner/         live task tree, log file, questions to the operator; see docs/RUNNER.md
+internal/pipeline/       the engine every stage uses
+                         pipeline.go  Inputs, Env, Stage, Run (resume loop)
+                         machine.go   Machine: run a command here or on the target over ssh
+                         state.go     State, LoadState, Save
+internal/stages/         one file per stage, plus the tool helpers they share
+                         stages.go    All: the ordered stage list
+                         00_environment_preparation.go
+                         disk.go      lsblk parsing, disk choice
 ```
 
-Bugs / gaps found:
-- `pipeline.Run`: the partition loop appends **every** stage to `unprocessedStages` (missing `else`), so the "all processed" check never fires; the run loop iterates `p.stages` instead of the unprocessed list; `StageIndex` is never advanced; state is never persisted; `Rollback` is never called.
-- Stage 01 pings `google.com` instead of `state.Target`, and passes `context.Background()` instead of `ctx`.
-- `main` swallows the pipeline error (empty `if`), never sets an exit code; `--verbose` flag is commented out; host/target hardcoded.
-- Local executor has no stdin, env, workdir, streaming output, or TTY passthrough — all needed (secrets via stdin, `nixos-anywhere` progress, interactive vim).
-- `ping` flags differ between macOS (the provider, workhorse) and Linux: `-W` means different things. Prefer a TCP dial to :22 in Go over shelling out to ping.
-- Stage numbering is `int` (1) while the Pipeline uses `0.1 … 4.2`.
+How a run goes: `main` parses the flags into `pipeline.Inputs`, `resolveInputs` asks for the missing target and host and loads `<state dir>/<host>.json`, then `pipeline.Run(ctx, env, stages.All)` runs the stages in list order. A stage whose ID is in `State.Completed` is skipped; every other stage is recorded and the state saved when it succeeds. A stage with `Always: true` (0.0) runs every time and is never recorded.
+
+Three kinds of data, kept apart:
+
+- `pipeline.Inputs`: what the operator chose for this run (flags and answers). Never persisted.
+- `pipeline.State`: facts that must survive a restart (install disk, completed stages, later recipients and commits). One JSON file per host.
+- `pipeline.Machine`: where commands run. `env.Local` is the provider, `env.Remote` the target (`ssh … -l root <target>` with the system ssh).
+
+### Adding a stage
+
+1. `internal/stages/<nn>_<name>.go` with `func <name>(ctx context.Context, env *pipeline.Env) error`. Sub-steps are `runner.Run` / `runner.Parallel`; commands are `env.Local.Run(ctx, "nix", …)` and `env.Remote.Run(ctx, "lsblk", …)`; secrets go through `RunStdin`, never through args.
+2. One entry in `stages.All`, at its place in the order.
+3. A fact a later run needs becomes a field on `pipeline.State`. A new flag becomes a field on `pipeline.Inputs` and a line in `flags.go`.
+4. A tool several stages call (`nix eval`, `git`, `sops`) becomes a plain file in `internal/stages` taking a `pipeline.Machine`, like `disk.go`.
+
+### Conventions
+
+- No interface without two implementations, no package without a second importer in sight.
+- Stages are plain functions; everything they need comes in through `ctx` and `*pipeline.Env`.
+- State holds only what must survive a restart.
 
 ---
 
@@ -135,7 +151,7 @@ Bugs / gaps found:
 
 | Pipeline stage | Runs on | Legacy `install-host.sh` equivalent | Port notes |
 |---|---|---|---|
-| 0.0 Environment preparation | provider (+target `lsblk`) | `eval_spec`, arg parsing, tool/disk resolution | Always runs (not recorded in `CompletedStages`). Checks `nix ssh git nc`, config flake + `bootstrap.nix`, SSH key; disk from `--disk`, else the non-removable whole disks on the target: the one recorded by an earlier run, a lone disk, or the operator's pick from a numbered list. |
+| 0.0 Environment preparation | provider (+target `lsblk`) | `eval_spec`, arg parsing, tool/disk resolution | Always runs (not recorded in `State.Completed`). Checks target reachable on :22, `ssh root@target true`, `nix ssh git` in PATH, internet, config flake; disk from `--disk`, else the non-removable whole disks on the target: the one recorded by an earlier run, a lone disk, or the operator's pick from a numbered list. |
 | 0.1 Provider preparation | provider | `eval_spec`, preflight: nix-secrets present, disk not `REPLACE_ME`, ping, `ssh root@ip`, remote `nix`/`lsblk`/internet check, `test -b $DEVICE`, show `lsblk`, type "install", LUKS prompt → `/tmp/disko-password` | Keep the typed confirmation + lsblk display. Stream the LUKS pass via stdin, never argv. Use a TCP dial instead of ping. |
 | 0.2 Base install | provider → target | `nix run github:nix-community/nixos-anywhere -- [--generate-hardware-config …] --build-on-remote --flake .#<host>-bootstrap --target-host root@ip`; commit hardware config; skip if `/run/current-system` exists | Then wait for SSH (`sshWaitTimeout`, poll 5s), TOFU then pin ed25519 host key → state. |
 | 1.1 Host identity | target | `cat /etc/ssh/ssh_host_ed25519_key.pub \| ssh-to-age` (run on provider) | Can be done in Go with `github.com/Mic92/ssh-to-age` (library) — no tool needed. Store recipient + fingerprint in state. |
@@ -194,15 +210,15 @@ Add to the bootstrap module : `git`, `sops`, `age`, `ssh-to-age`, `vim`, and wha
 ### 6.9 Housekeeping spotted
 - `hosts/nixos/atlas/default.nix` sets `users.users.root.initialPassword = "test"` in the full config — remove.
 - `broadway/disko.nix` device is still `REPLACE_ME`.
-- The installer folder is not a git repo yet.
 
 ---
 
-## 7. Suggested direction for the Go code (fits what's already there)
+## 7. Direction for the Go code
 
-- **State**: persist `State` as JSON per host (e.g. `~/.local/state/nixos-installer/<host>.json`), save after every stage. Add: `Users []string`, `PrimaryUser`, `HostKeyFingerprint`, `HostRecipient`, `UserRecipients map[string]string`, `SecretsCommit`, `ConfigRev`, `Marker` (`awaiting-secrets-phase`, `converged`), `CompletedStages []string`.
-- **Stage IDs**: use string IDs matching the Pipeline (`"0.1"`, `"2.3"`…) or keep `int` but map 1:1 and document it; resume = first stage not in `CompletedStages`.
-- **Executors**: `Local` + `SSH` (target) sharing one interface; options for stdin (`io.Reader`, for secrets), env, dir, streamed output to the logger, and an interactive mode (`ssh -t`, attach os.Stdin/Stdout, stop the spinner first) for vim.
-- **Adapters** to add: `nix eval --json`, `nixos-anywhere`, `ssh`/`ssh-keyscan`, `git`, `sops`, `nixos-rebuild`. Do ssh→age conversion and `.sops.yaml` editing in-process.
-- **CLI** (implemented in `internal/cli`): `--target` (prompted when empty; IPv4, IPv6, or link-local IPv6 with zone such as `fe80::1%eth0`), `--host` (picked from `hosts/nixos/*/bootstrap.nix` when empty), `--config` (default `./`), `--disk` (picked on the target when empty), `--verbose`. Planned: `install --host --target` (full) and `secrets --host --target` (Phase 2–3 resume, as in Pipeline 4.2); flags for `--verbose`, `--config`, `--state-dir`.
+- **State**: `pipeline.State`, JSON per host in `~/.local/state/nixos-installer/<host>.json`, saved after every stage. Has `Host`, `Disk`, `Completed`. To add as stages need them: `Users []string`, `PrimaryUser`, `HostKeyFingerprint`, `HostRecipient`, `UserRecipients map[string]string`, `SecretsCommit`, `ConfigRev`, `Marker` (`awaiting-secrets-phase`, `converged`).
+- **Stage IDs**: strings matching the Pipeline (`"0.1"`, `"2.3"`…); the order is the order of `stages.All`; resume = skip what is in `State.Completed`.
+- **Machines**: `pipeline.Machine` runs a command locally or through the system `ssh`, with output streamed to the runner and stdin for secrets (`RunStdin`). Still to add with the stage that needs it: an opt-out from streaming for commands that print secrets, and an interactive mode (`ssh -t`, attach the terminal, stop the spinner first) for vim.
+- **Host key**: `pipeline.SSH` still disables host key checking (TODO in `machine.go`). Stage 0.2 should pin the key (TOFU into a known_hosts file under the state dir) by extending that option list, and pass the same options to nixos-anywhere / nixos-rebuild so there is one SSH configuration.
+- **Tool helpers** to add in `internal/stages`: `nix eval --json`, `nixos-anywhere`, `ssh-keyscan`, `git`, `sops`, `nixos-rebuild`. Do ssh→age conversion and `.sops.yaml` editing in-process.
+- **CLI** (`cmd/nixos-installer/flags.go`, `inputs.go`): `--target` (prompted when empty; IPv4, IPv6, or link-local IPv6 with zone such as `fe80::1%eth0`), `--host` (picked from `hosts/nixos/*/bootstrap.nix` when empty), `--config` (default `./`), `--disk` (picked on the target when empty), `--verbose`. Planned: `install --host --target` (full) and `secrets --host --target` (Phase 2–3 resume, as in Pipeline 4.2, by filtering `stages.All`); `--state-dir`.
 - **Secrets hygiene**: never put secrets in argv or logs (bash script already follows this — keep it), always `umask 077` on target, cleanup in a deferred step even on failure.

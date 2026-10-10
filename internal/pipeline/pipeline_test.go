@@ -3,102 +3,134 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"errors"
 	"installer/internal/runner"
-	"installer/internal/stage"
-	"installer/internal/state"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-type fakeStage struct {
-	id   string
-	name string
-	ran  *[]string
+// fake is a stage that records that it ran.
+func fake(id string, ran *[]string) Stage {
+	return Stage{ID: id, Name: "stage " + id, Run: func(context.Context, *Env) error {
+		*ran = append(*ran, id)
+		return nil
+	}}
 }
 
-func (f fakeStage) ID() string   { return f.id }
-func (f fakeStage) Name() string { return f.name }
-func (f fakeStage) Run(ctx context.Context, env *stage.Env) error {
-	*f.ran = append(*f.ran, f.name)
-	return nil
-}
-
-func TestRunsOnlyPendingStagesInOrder(t *testing.T) {
-	var ran []string
-	stages := []stage.Stage{
-		fakeStage{"0.3", "c", &ran},
-		fakeStage{"0.1", "a", &ran},
-		fakeStage{"0.2", "b", &ran},
-	}
-	var out bytes.Buffer
-	ctx := runner.NewContext(context.Background(), runner.New(runner.Options{Out: &out}))
-	st := &state.State{CompletedStages: []string{"0.1"}}
-	p := New(stages, &stage.Env{State: st}, t.TempDir())
-	if err := p.Run(ctx); err != nil {
+// run runs the stages for host "h" with the state kept in dir and returns
+// what the runner printed.
+func run(t *testing.T, dir string, stages ...Stage) (*State, string, error) {
+	t.Helper()
+	st, err := LoadState(dir, "h")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(ran, ","); got != "b,c" {
-		t.Fatalf("ran %s, want b,c", got)
-	}
-}
-
-type alwaysStage struct{ fakeStage }
-
-func (alwaysStage) AlwaysRun() bool { return true }
-
-func TestAlwaysRunStageRerunsAndIsNotRecorded(t *testing.T) {
-	var ran []string
-	stages := []stage.Stage{
-		fakeStage{"0.1", "a", &ran},
-		alwaysStage{fakeStage{"0.0", "env", &ran}},
-	}
 	var out bytes.Buffer
 	ctx := runner.NewContext(context.Background(), runner.New(runner.Options{Out: &out}))
-	st := &state.State{CompletedStages: []string{"0.0", "0.1"}}
-	p := New(stages, &stage.Env{State: st}, t.TempDir())
-	if err := p.Run(ctx); err != nil {
+	err = Run(ctx, &Env{State: st}, stages)
+	return st, out.String(), err
+}
+
+func TestRunsStagesInListOrderAndRecordsThem(t *testing.T) {
+	var ran []string
+	dir := t.TempDir()
+	st, _, err := run(t, dir, fake("0.2", &ran), fake("0.10", &ran), fake("0.3", &ran))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(ran, ","); got != "env" {
-		t.Fatalf("ran %s, want env", got)
+	if got := strings.Join(ran, ","); got != "0.2,0.10,0.3" {
+		t.Fatalf("ran %s, want the order of the list", got)
 	}
-	if got := strings.Join(st.CompletedStages, ","); got != "0.0,0.1" {
-		t.Fatalf("completed %s, want unchanged", got)
+	if got := strings.Join(st.Completed, ","); got != "0.2,0.10,0.3" {
+		t.Fatalf("completed %s", got)
+	}
+	saved, err := LoadState(dir, "h")
+	if err != nil || strings.Join(saved.Completed, ",") != "0.2,0.10,0.3" {
+		t.Fatalf("saved state: %+v, %v", saved, err)
 	}
 }
 
-func TestStagesSortNumerically(t *testing.T) {
+func TestResumesBehindCompletedStages(t *testing.T) {
 	var ran []string
-	stages := []stage.Stage{
-		fakeStage{"10.0", "c", &ran},
-		fakeStage{"2.0", "a", &ran},
-		fakeStage{"2.10", "b2", &ran},
-		fakeStage{"2.9", "b1", &ran},
-	}
-	var out bytes.Buffer
-	ctx := runner.NewContext(context.Background(), runner.New(runner.Options{Out: &out}))
-	p := New(stages, &stage.Env{State: &state.State{}}, t.TempDir())
-	if err := p.Run(ctx); err != nil {
+	dir := t.TempDir()
+	if _, _, err := run(t, dir, fake("0.1", &ran)); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(ran, ","); got != "a,b1,b2,c" {
-		t.Fatalf("ran %s, want a,b1,b2,c", got)
+
+	ran = nil
+	_, out, err := run(t, dir, fake("0.1", &ran), fake("0.2", &ran), fake("0.3", &ran))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ran, ","); got != "0.2,0.3" {
+		t.Fatalf("ran %s, want 0.2,0.3", got)
+	}
+	if !strings.Contains(out, "0.1 stage 0.1 (done earlier)") {
+		t.Errorf("skipped stage not reported:\n%s", out)
 	}
 }
 
-func TestSaveFailureFailsPipeline(t *testing.T) {
+func TestAlwaysStageRerunsAndIsNotRecorded(t *testing.T) {
 	var ran []string
-	var out bytes.Buffer
-	ctx := runner.NewContext(context.Background(), runner.New(runner.Options{Out: &out}))
+	env := fake("0.0", &ran)
+	env.Always = true
+	dir := t.TempDir()
+	for range 2 {
+		st, _, err := run(t, dir, env, fake("0.1", &ran))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(st.Completed, ","); got != "0.1" {
+			t.Fatalf("completed %s, want 0.1", got)
+		}
+	}
+	if got := strings.Join(ran, ","); got != "0.0,0.1,0.0" {
+		t.Fatalf("ran %s, want 0.0,0.1,0.0", got)
+	}
+}
+
+func TestFailedStageStopsThePipelineAndIsNotRecorded(t *testing.T) {
+	var ran []string
+	bad := Stage{ID: "0.2", Name: "bad", Run: func(context.Context, *Env) error { return errors.New("boom") }}
+	st, out, err := run(t, t.TempDir(), fake("0.1", &ran), bad, fake("0.3", &ran))
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	if got := strings.Join(ran, ","); got != "0.1" {
+		t.Fatalf("ran %s, want 0.1", got)
+	}
+	if got := strings.Join(st.Completed, ","); got != "0.1" {
+		t.Fatalf("completed %s, want 0.1", got)
+	}
+	if !strings.Contains(out, "✗ 0.2 bad: boom") {
+		t.Errorf("failure not shown:\n%s", out)
+	}
+}
+
+func TestSaveFailureFailsTheStage(t *testing.T) {
+	var ran []string
+	dir := filepath.Join(t.TempDir(), "state")
+	st, err := LoadState(dir, "h")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A regular file where the state directory should be makes Save fail.
-	blocker := filepath.Join(t.TempDir(), "file")
-	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+	if err := os.WriteFile(dir, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := New([]stage.Stage{fakeStage{"1.0", "a", &ran}}, &stage.Env{State: &state.State{HostName: "h"}}, filepath.Join(blocker, "state"))
-	if err := p.Run(ctx); err == nil {
-		t.Fatal("want error when state cannot be saved")
+
+	var out bytes.Buffer
+	ctx := runner.NewContext(context.Background(), runner.New(runner.Options{Out: &out}))
+	err = Run(ctx, &Env{State: st}, []Stage{fake("1.0", &ran), fake("1.1", &ran)})
+	if err == nil || !strings.Contains(err.Error(), "persist state") {
+		t.Fatalf("err = %v, want a persist error", err)
+	}
+	if got := strings.Join(ran, ","); got != "1.0" {
+		t.Fatalf("ran %s, want the pipeline to stop behind 1.0", got)
+	}
+	if !strings.Contains(out.String(), "✗ 1.0 stage 1.0: persist state") {
+		t.Errorf("save failure not shown to the operator:\n%s", out.String())
 	}
 }

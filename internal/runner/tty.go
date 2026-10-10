@@ -50,9 +50,9 @@ func (l *Runner) drawLocked() {
 	}
 
 	var b strings.Builder
-	if !l.hidden {
+	if !l.cursorHidden {
 		b.WriteString("\033[?25l")
-		l.hidden = true
+		l.cursorHidden = true
 	}
 	if l.liveLines > 0 {
 		fmt.Fprintf(&b, "\033[%dA", l.liveLines)
@@ -76,7 +76,7 @@ func (l *Runner) commitLocked() {
 	for l.committed < len(l.roots) && l.roots[l.committed].finished() {
 		r := l.roots[l.committed]
 		var lines []line
-		l.collect(r, 0, l.now(), false, &lines)
+		l.collect(r, r.depth(), l.now(), false, &lines)
 		for _, s := range renderLines(lines, 0, l.tty) {
 			l.pending.WriteString(s)
 			l.pending.WriteByte('\n')
@@ -92,7 +92,7 @@ func (l *Runner) liveRender() []string {
 	var lines []line
 	now := l.now()
 	for _, r := range l.roots[l.committed:] {
-		l.collect(r, 0, now, true, &lines)
+		l.collect(r, r.depth(), now, true, &lines)
 	}
 	width, height := l.size()
 	out := renderLines(lines, width, true)
@@ -112,7 +112,7 @@ func (l *Runner) liveRender() []string {
 
 // collect appends the rows for n and everything below it.
 func (l *Runner) collect(n *node, depth int, now time.Time, live bool, out *[]line) {
-	if n.kind == kindLog {
+	if n.state == stateLog {
 		sym, col := logStyle(n.level, depth == 0)
 		*out = append(*out, line{depth: depth, sym: sym, color: col, text: n.title})
 		return
@@ -154,13 +154,13 @@ func (l *Runner) collect(n *node, depth int, now time.Time, live bool, out *[]li
 	}
 }
 
-func logStyle(level Level, root bool) (sym, color string) {
-	switch level {
-	case LevelWarn:
+func logStyle(lv level, root bool) (sym, color string) {
+	switch lv {
+	case levelWarn:
 		return "⚠", yellow
-	case LevelError:
+	case levelError:
 		return "✗", red
-	case LevelInfo:
+	case levelInfo:
 		if root {
 			return "✓", green
 		}

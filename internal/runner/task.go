@@ -10,19 +10,13 @@ import (
 	"time"
 )
 
-type nodeKind int
+type nodeState int
 
 const (
-	kindTask nodeKind = iota
-	kindLog
-)
-
-type taskState int
-
-const (
-	stateRunning taskState = iota
+	stateRunning nodeState = iota
 	stateOK
 	stateFailed
+	stateLog // a log line: never runs, has no children
 )
 
 const tailKept = 20
@@ -34,22 +28,21 @@ var (
 
 // node is a task or a log line. Command output lives in a task's tail.
 type node struct {
-	kind     nodeKind
 	title    string
-	level    Level
+	level    level
 	parent   *node
+	top      *node // the entry of Runner.roots that n is drawn under; n itself for an entry
 	children []*node
 
 	start, end time.Time
-	state      taskState
+	state      nodeState
 	err        error
 
 	tail []string // last tailKept output lines
 	out  *outputWriter
 
 	hidden    bool // not shown (debug task without verbose, or inside one)
-	orphan    bool // started after its root was committed; printed on End
-	committed bool // roots only
+	committed bool // entries of Runner.roots only
 }
 
 func (n *node) depth() int {
@@ -58,13 +51,6 @@ func (n *node) depth() int {
 		d++
 	}
 	return d
-}
-
-func (n *node) root() *node {
-	for n.parent != nil {
-		n = n.parent
-	}
-	return n
 }
 
 // path joins the titles from the root to n with " › ".
@@ -83,9 +69,7 @@ func (n *node) path() string {
 }
 
 // finished reports whether n and everything below it is done.
-func (n *node) finished() bool {
-	return n.kind == kindLog || n.state != stateRunning
-}
+func (n *node) finished() bool { return n.state != stateRunning }
 
 // Task is a handle on a running task. It only handles lifecycle; logging
 // goes through the context returned by Start.
@@ -97,16 +81,16 @@ type Task struct {
 // Start begins a task as a child of ctx's task, or as a root. The returned
 // context carries the new task.
 func Start(ctx context.Context, title string) (context.Context, *Task) {
-	return start(ctx, title, LevelInfo)
+	return start(ctx, title, levelInfo)
 }
 
 // StartDebug is like Start but the task and everything under it is hidden
-// unless the logger is verbose.
+// unless the runner is verbose.
 func StartDebug(ctx context.Context, title string) (context.Context, *Task) {
-	return start(ctx, title, LevelDebug)
+	return start(ctx, title, levelDebug)
 }
 
-func start(ctx context.Context, title string, level Level) (context.Context, *Task) {
+func start(ctx context.Context, title string, lv level) (context.Context, *Task) {
 	v := from(ctx)
 	if v == nil {
 		return ctx, &Task{}
@@ -116,22 +100,22 @@ func start(ctx context.Context, title string, level Level) (context.Context, *Ta
 	defer l.mu.Unlock()
 
 	n := &node{
-		kind:   kindTask,
 		title:  oneLine(title),
-		level:  level,
+		level:  lv,
 		parent: v.n,
 		start:  l.now(),
 	}
-	n.hidden = (level == LevelDebug && !l.verbose) || (v.n != nil && v.n.hidden)
+	n.top = n
+	n.hidden = (lv == levelDebug && !l.verbose) || (v.n != nil && v.n.hidden)
 
 	switch {
 	case n.hidden:
-	case v.n == nil:
+	case v.n == nil, v.n.state != stateRunning:
+		// A task under a parent that already ended gets its own entry, drawn
+		// at its depth below everything that started before it.
 		l.roots = append(l.roots, n)
-	case v.n.root().committed || v.n.state != stateRunning:
-		n.orphan = true
-		l.orphans = append(l.orphans, n)
 	default:
+		n.top = v.n.top
 		v.n.children = append(v.n.children, n)
 	}
 
@@ -177,9 +161,7 @@ func (l *Runner) endLocked(n *node, err error) {
 		return
 	}
 	for _, c := range n.children {
-		if c.kind == kindTask {
-			l.endLocked(c, errParentEnded)
-		}
+		l.endLocked(c, errParentEnded)
 	}
 	if n.out != nil {
 		n.out.flushLocked()
@@ -197,10 +179,6 @@ func (l *Runner) endLocked(n *node, err error) {
 		sym, msg = "✗", failedTitle(n)
 	}
 	l.fileEvent(sym, n, msg)
-
-	if n.orphan && !n.hidden {
-		l.emitCommitted(n)
-	}
 }
 
 // failedTitle is the text of a failed task line.
@@ -217,40 +195,32 @@ func failedTitle(n *node) string {
 }
 
 // logLocked records a log line under n (or at the root if n is nil).
-func (l *Runner) logLocked(n *node, level Level, msg string) {
+func (l *Runner) logLocked(n *node, lv level, msg string) {
 	sym := "•"
-	switch level {
-	case LevelInfo:
+	switch lv {
+	case levelInfo:
 		sym = "→"
-	case LevelWarn:
+	case levelWarn:
 		sym = "⚠"
-	case LevelError:
+	case levelError:
 		sym = "✗"
 	}
 	l.fileEvent(sym, n, msg)
 
-	if (level == LevelDebug && !l.verbose) || (n != nil && n.hidden) {
+	if (lv == levelDebug && !l.verbose) || (n != nil && n.hidden) {
 		return
 	}
 
-	ln := &node{kind: kindLog, level: level, title: msg, parent: n, start: l.now()}
+	ln := &node{state: stateLog, level: lv, title: msg, parent: n, start: l.now()}
+	ln.top = ln
 	switch {
-	case n == nil:
+	case n == nil, n.top.committed:
+		// What n is drawn under is already printed: the line gets its own
+		// entry, drawn at its depth.
 		l.roots = append(l.roots, ln)
-	case n.orphan || n.root().committed:
-		l.emitCommitted(ln)
 	default:
+		ln.top = n.top
 		n.children = append(n.children, ln)
-	}
-}
-
-// emitCommitted prints a single node straight away at its depth.
-func (l *Runner) emitCommitted(n *node) {
-	var lines []line
-	l.collect(n, n.depth(), l.now(), false, &lines)
-	for _, s := range renderLines(lines, 0, l.tty) {
-		l.pending.WriteString(s)
-		l.pending.WriteByte('\n')
 	}
 }
 

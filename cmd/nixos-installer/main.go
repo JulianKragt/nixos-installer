@@ -5,11 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"installer/internal/cli"
-	"installer/internal/command/executor"
 	"installer/internal/pipeline"
 	"installer/internal/runner"
-	"installer/internal/stage"
 	"installer/internal/stages"
 	"os"
 	"os/signal"
@@ -29,12 +26,9 @@ func run() int {
 		syscall.SIGTERM,
 	)
 	defer stop()
-	go func() { // restore default handling so a second Ctrl+C force-quits
-		<-ctx.Done()
-		stop()
-	}()
+	context.AfterFunc(ctx, stop) // restore default handling so a second Ctrl+C force-quits
 
-	opts, err := cli.Parse(os.Args[1:], os.Stderr)
+	opts, err := parseFlags(os.Args[1:], os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
@@ -43,45 +37,21 @@ func run() int {
 		return 2
 	}
 
-	stateDir := appStateDir()
-	logOpts := runner.Options{Out: os.Stderr, Verbose: opts.Verbose}
-	logPath, logFile, err := openLogFile()
+	dir := stateDir()
+	runnerOpts := runner.Options{Out: os.Stderr, In: os.Stdin, Verbose: opts.verbose}
+	logPath, logFile, err := openLogFile(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: no log file: %v\n", err)
 	} else {
 		defer logFile.Close()
-		logOpts.File = logFile
+		runnerOpts.File = logFile
 	}
 
-	logger := runner.New(logOpts)
-	ctx = runner.NewContext(ctx, logger)
-
-	in := runner.NewInput(os.Stdin)
-	st, err := resolveInputs(ctx, &opts, in, stateDir)
+	ui := runner.New(runnerOpts)
+	err = install(runner.NewContext(ctx, ui), opts.Inputs, dir)
+	ui.Close()
 	if err != nil {
-		logger.Close()
-		if logFile != nil {
-			fmt.Fprintf(os.Stderr, "Full log: %s\n", logPath)
-		}
-		return 1
-	}
-
-	home, _ := os.UserHomeDir()
-	sshKey := filepath.Join(home, ".ssh", "id_ed25519")
-	remote := &stage.TargetSSH{SSH: executor.SSH{User: "root", KeyPath: sshKey}, State: st}
-	env := &stage.Env{State: st, Local: streaming{executor.NewLocal()}, Remote: streaming{remote}}
-	p := pipeline.New([]stage.Stage{
-		&stages.EnvironmentPreparationStage{
-			Opts:     opts,
-			SSHKey:   sshKey,
-			StateDir: stateDir,
-			In:       in,
-		},
-	}, env, stateDir)
-	runErr := p.Run(ctx)
-
-	logger.Close()
-	if runErr != nil {
+		// The runner already showed err as a failed task.
 		if logFile != nil {
 			fmt.Fprintf(os.Stderr, "Full log: %s\n", logPath)
 		}
@@ -90,11 +60,19 @@ func run() int {
 	return 0
 }
 
-// appStateDir is the installer's state directory.
-func appStateDir() string { return xdgStateDir("nixos-installer") }
+// install completes the inputs and runs the pipeline for the chosen host.
+func install(ctx context.Context, in pipeline.Inputs, stateDir string) error {
+	st, err := resolveInputs(ctx, &in, stateDir)
+	if err != nil {
+		return err
+	}
+	env := &pipeline.Env{Inputs: in, State: st, Remote: pipeline.SSH(in.Target)}
+	return pipeline.Run(ctx, env, stages.All)
+}
 
-// xdgStateDir returns ${XDG_STATE_HOME:-~/.local/state}/<app>.
-func xdgStateDir(app string) string {
+// stateDir returns ${XDG_STATE_HOME:-~/.local/state}/nixos-installer.
+func stateDir() string {
+	const app = "nixos-installer"
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -106,9 +84,9 @@ func xdgStateDir(app string) string {
 	return filepath.Join(base, app)
 }
 
-// openLogFile creates ${XDG_STATE_HOME:-~/.local/state}/nixos-installer/logs/install-<time>.log.
-func openLogFile() (string, *os.File, error) {
-	dir := filepath.Join(appStateDir(), "logs")
+// openLogFile creates <stateDir>/logs/install-<time>.log.
+func openLogFile(stateDir string) (string, *os.File, error) {
+	dir := filepath.Join(stateDir, "logs")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", nil, err
 	}

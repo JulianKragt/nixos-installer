@@ -1,112 +1,70 @@
+// Package pipeline is the engine the stages run in: the machines they run
+// commands on, the state that survives a restart, and the loop that runs the
+// stages in order and resumes behind the last completed one.
 package pipeline
 
 import (
 	"context"
 	"fmt"
 	"installer/internal/runner"
-	"installer/internal/stage"
-	"sort"
-	"strconv"
-	"strings"
+	"slices"
 )
 
-type Pipeline struct {
-	stages   []stage.Stage
-	env      *stage.Env
-	stateDir string
+// Inputs are the operator's choices for this run. They are complete before
+// the first stage runs.
+type Inputs struct {
+	Host      string // host to install: a directory under hosts/nixos in the config flake
+	Target    string // IP address of the target machine
+	ConfigDir string // path to the nixos-config flake
+	Disk      string // disk to install to; empty = detect on the target
 }
 
-func New(stages []stage.Stage, env *stage.Env, stateDir string) Pipeline {
-	sorted := make([]stage.Stage, len(stages))
-	copy(sorted, stages)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return idLess(sorted[i].ID(), sorted[j].ID())
-	})
-	return Pipeline{stages: sorted, env: env, stateDir: stateDir}
+// Env is everything a stage needs besides its context. Parallel steps must
+// not write State; they return results and the stage assigns them after the
+// join.
+type Env struct {
+	Inputs
+	State  *State
+	Local  Machine // the provider: the machine the installer runs on
+	Remote Machine // the target
 }
 
-// idLess orders stage IDs like "0.1" < "0.10" < "1.0" by comparing their
-// dot-separated parts numerically, falling back to string order.
-func idLess(a, b string) bool {
-	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(pa) && i < len(pb); i++ {
-		na, ea := strconv.Atoi(pa[i])
-		nb, eb := strconv.Atoi(pb[i])
-		switch {
-		case ea != nil || eb != nil:
-			if pa[i] != pb[i] {
-				return pa[i] < pb[i]
-			}
-		case na != nb:
-			return na < nb
-		}
-	}
-	return len(pa) < len(pb)
+// Stage is one step of the pipeline.
+type Stage struct {
+	ID   string // as in the Pipeline doc: "0.0", "2.3"
+	Name string
+	// Always marks a stage that runs on every invocation, even when it ran
+	// before (e.g. environment checks). It is not recorded in State.Completed.
+	Always bool
+	Run    func(ctx context.Context, env *Env) error
 }
 
-func stageNames(ss []stage.Stage) []string {
-	names := make([]string, len(ss))
-	for i, s := range ss {
-		names[i] = s.Name()
-	}
-	return names
-}
-
-func stageTitle(s stage.Stage) string { return s.ID() + " " + s.Name() }
-
-func alwaysRun(s stage.Stage) bool {
-	a, ok := s.(stage.AlwaysRun)
-	return ok && a.AlwaysRun()
-}
-
-func (p *Pipeline) Run(ctx context.Context) error {
+// Run runs the stages in the given order. A stage in State.Completed is
+// skipped; every other stage is recorded there when it succeeds and the state
+// is saved, so the next invocation resumes behind it.
+func Run(ctx context.Context, env *Env, stages []Stage) error {
 	runner.Info(ctx, "Starting pipeline")
-
-	completed := make(map[string]struct{}, len(p.env.State.CompletedStages))
-	for _, id := range p.env.State.CompletedStages {
-		completed[id] = struct{}{}
-	}
-
-	var skipped, pending []stage.Stage
-	for _, s := range p.stages {
-		if alwaysRun(s) {
+	for _, s := range stages {
+		title := s.ID + " " + s.Name
+		if !s.Always && slices.Contains(env.State.Completed, s.ID) {
+			runner.Info(ctx, title+" (done earlier)")
 			continue
 		}
-		if _, done := completed[s.ID()]; done {
-			skipped = append(skipped, s)
-		} else {
-			pending = append(pending, s)
-		}
-	}
-
-	if len(pending) == 0 {
-		runner.Warn(ctx, "All stages already have been processed")
-	} else {
-		if len(skipped) > 0 {
-			runner.Warn(ctx, "Skipping already processed stages: "+strings.Join(stageNames(skipped), ", "))
-		}
-		runner.Info(ctx, "Stages to process: "+strings.Join(stageNames(pending), ", "))
-	}
-
-	for _, s := range p.stages {
-		always := alwaysRun(s)
-		if _, done := completed[s.ID()]; done && !always {
-			continue
-		}
-		if err := runner.Run(ctx, stageTitle(s), func(ctx context.Context) error {
-			return s.Run(ctx, p.env)
+		if err := runner.Run(ctx, title, func(ctx context.Context) error {
+			if err := s.Run(ctx, env); err != nil {
+				return err
+			}
+			if s.Always {
+				return nil // re-run every time, never recorded
+			}
+			env.State.Completed = append(env.State.Completed, s.ID)
+			if err := env.State.Save(); err != nil {
+				return fmt.Errorf("persist state: %w", err)
+			}
+			return nil
 		}); err != nil {
 			return err
 		}
-		if always {
-			continue // re-run every time, never recorded
-		}
-		p.env.State.CompletedStages = append(p.env.State.CompletedStages, s.ID())
-		if err := p.env.State.Save(p.stateDir); err != nil {
-			return fmt.Errorf("persist state after stage %s: %w", s.ID(), err)
-		}
 	}
-
-	runner.Debug(ctx, "Pipeline processed stages: "+strings.Join(stageNames(pending), ", "))
 	return nil
 }
