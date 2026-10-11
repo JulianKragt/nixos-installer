@@ -118,10 +118,9 @@ internal/pipeline/       the engine every stage uses
                          pipeline.go  Inputs, Env, Stage, Run (resume loop)
                          machine.go   Machine: run a command here or on the target over ssh
                          state.go     State, LoadState, Save
-internal/stages/         one file per stage, plus the tool helpers they share
+internal/stages/         one file per stage, nothing else
                          stages.go    All: the ordered stage list
                          00_environment_preparation.go
-                         disk.go      lsblk parsing, disk choice
 ```
 
 How a run goes: `main` parses the flags into `pipeline.Inputs`, `resolveInputs` asks for the missing target and host and loads `<state dir>/<host>.json`, then `pipeline.Run(ctx, env, stages.All)` runs the stages in list order. A stage whose ID is in `State.Completed` is skipped; every other stage is recorded and the state saved when it succeeds. A stage with `Always: true` (0.0) runs every time and is never recorded.
@@ -137,11 +136,11 @@ Three kinds of data, kept apart:
 1. `internal/stages/<nn>_<name>.go` with `func <name>(ctx context.Context, env *pipeline.Env) error`. Sub-steps are `runner.Run` / `runner.Parallel`; commands are `env.Local.Run(ctx, "nix", …)` and `env.Remote.Run(ctx, "lsblk", …)`; secrets go through `RunStdin`, never through args.
 2. One entry in `stages.All`, at its place in the order.
 3. A fact a later run needs becomes a field on `pipeline.State`. A new flag becomes a field on `pipeline.Inputs` and a line in `flags.go`.
-4. A tool several stages call (`nix eval`, `git`, `sops`) becomes a plain file in `internal/stages` taking a `pipeline.Machine`, like `disk.go`.
+4. Code only this stage uses lives in the stage's file, as the disk detection does in `00_environment_preparation.go`. A tool several stages call (`nix eval`, `git`, `sops`) gets its own package named after the tool (`internal/nix`, `internal/git`), with functions taking a `pipeline.Machine`. `internal/stages` holds stage files only.
 
 ### Conventions
 
-- No interface without two implementations, no package without a second importer in sight.
+- No interface without two implementations, no new package unless a second stage needs the code.
 - Stages are plain functions; everything they need comes in through `ctx` and `*pipeline.Env`.
 - State holds only what must survive a restart.
 
@@ -219,6 +218,6 @@ Add to the bootstrap module : `git`, `sops`, `age`, `ssh-to-age`, `vim`, and wha
 - **Stage IDs**: strings matching the Pipeline (`"0.1"`, `"2.3"`…); the order is the order of `stages.All`; resume = skip what is in `State.Completed`.
 - **Machines**: `pipeline.Machine` runs a command locally or through the system `ssh`, with output streamed to the runner and stdin for secrets (`RunStdin`). Still to add with the stage that needs it: an opt-out from streaming for commands that print secrets, and an interactive mode (`ssh -t`, attach the terminal, stop the spinner first) for vim.
 - **Host key**: `pipeline.SSH` still disables host key checking (TODO in `machine.go`). Stage 0.2 should pin the key (TOFU into a known_hosts file under the state dir) by extending that option list, and pass the same options to nixos-anywhere / nixos-rebuild so there is one SSH configuration.
-- **Tool helpers** to add in `internal/stages`: `nix eval --json`, `nixos-anywhere`, `ssh-keyscan`, `git`, `sops`, `nixos-rebuild`. Do ssh→age conversion and `.sops.yaml` editing in-process.
+- **Tool helpers** to add, each in its own package once a second stage needs it (§4): `nix eval --json`, `nixos-anywhere`, `ssh-keyscan`, `git`, `sops`, `nixos-rebuild`. Do ssh→age conversion and `.sops.yaml` editing in-process.
 - **CLI** (`cmd/nixos-installer/flags.go`, `inputs.go`): `--target` (prompted when empty; IPv4, IPv6, or link-local IPv6 with zone such as `fe80::1%eth0`), `--host` (picked from `hosts/nixos/*/bootstrap.nix` when empty), `--config` (default `./`), `--disk` (picked on the target when empty), `--verbose`. Planned: `install --host --target` (full) and `secrets --host --target` (Phase 2–3 resume, as in Pipeline 4.2, by filtering `stages.All`); `--state-dir`.
 - **Secrets hygiene**: never put secrets in argv or logs (bash script already follows this — keep it), always `umask 077` on target, cleanup in a deferred step even on failure.

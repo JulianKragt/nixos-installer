@@ -1,5 +1,4 @@
-// Package stages holds the stages of the install pipeline, one file per stage,
-// and the helpers they share.
+// Package stages holds the stages of the install pipeline, one file per stage.
 package stages
 
 import "installer/internal/pipeline"

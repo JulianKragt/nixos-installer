@@ -248,7 +248,18 @@ func panicError(r any, withStack bool) error {
 	return fmt.Errorf("panic: %v\n%s", r, buf[:n])
 }
 
-// Step is one unit of work for Parallel.
+// RunSteps runs the steps one after another with Run and stops at the first
+// error, which it returns.
+func RunSteps(ctx context.Context, steps ...Step) error {
+	for _, s := range steps {
+		if err := Run(ctx, s.Title, s.Fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Step is one unit of work for Parallel and RunSteps.
 type Step struct {
 	Title string
 	Fn    func(context.Context) error
