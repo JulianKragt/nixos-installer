@@ -56,7 +56,7 @@ type Runner struct {
 	size func() (width, height int)
 
 	roots        []*node
-	committed    int // roots[:committed] are flushed above the live area
+	numCommitted int // roots[:numCommitted] are flushed above the live area
 	pending      strings.Builder
 	liveLines    int
 	frame        int
@@ -85,16 +85,16 @@ func New(opts Options) *Runner {
 		}
 	}
 
-	l := newRunner(opts, tty, size)
+	r := newRunner(opts, tty, size)
 	if tty {
-		l.wg.Add(1)
-		go l.tick()
+		r.wg.Add(1)
+		go r.tick()
 	}
-	return l
+	return r
 }
 
 func newRunner(opts Options, tty bool, size func() (int, int)) *Runner {
-	l := &Runner{
+	r := &Runner{
 		out:     opts.Out,
 		file:    opts.File,
 		verbose: opts.Verbose,
@@ -103,30 +103,30 @@ func newRunner(opts Options, tty bool, size func() (int, int)) *Runner {
 		size:    size,
 		stop:    make(chan struct{}),
 	}
-	if l.out == nil {
-		l.out = io.Discard
+	if r.out == nil {
+		r.out = io.Discard
 	}
-	if l.size == nil {
-		l.size = func() (int, int) { return 0, 0 }
+	if r.size == nil {
+		r.size = func() (int, int) { return 0, 0 }
 	}
 	if opts.In != nil {
-		l.in = bufio.NewReader(opts.In)
+		r.in = bufio.NewReader(opts.In)
 		if f, ok := opts.In.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-			l.inFile = f
+			r.inFile = f
 		}
 	}
-	return l
+	return r
 }
 
-func (l *Runner) tick() {
-	defer l.wg.Done()
+func (r *Runner) tick() {
+	defer r.wg.Done()
 	t := time.NewTicker(tickInterval)
 	defer t.Stop()
 	for {
 		select {
 		case <-t.C:
-			l.draw()
-		case <-l.stop:
+			r.draw()
+		case <-r.stop:
 			return
 		}
 	}
@@ -134,72 +134,72 @@ func (l *Runner) tick() {
 
 // Close stops the ticker, ends tasks that are still running, draws a final
 // time and restores the cursor. It must run before os.Exit.
-func (l *Runner) Close() {
-	l.once.Do(func() {
-		close(l.stop)
-		l.wg.Wait()
+func (r *Runner) Close() {
+	r.once.Do(func() {
+		close(r.stop)
+		r.wg.Wait()
 
-		l.mu.Lock()
-		defer l.mu.Unlock()
-		for _, r := range l.roots[l.committed:] {
-			l.endLocked(r, errClosed)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for _, root := range r.roots[r.numCommitted:] {
+			r.endLocked(root, errClosed)
 		}
-		l.closed = true
-		l.drawLocked()
-		if l.cursorHidden {
-			l.write("\033[?25h")
-			l.cursorHidden = false
+		r.closed = true
+		r.drawLocked()
+		if r.cursorHidden {
+			r.write(showCursor)
+			r.cursorHidden = false
 		}
 	})
 }
 
-// write sends s to Out. Caller must hold l.mu.
-func (l *Runner) write(s string) {
-	io.WriteString(l.out, s)
+// write sends s to Out. Caller must hold r.mu.
+func (r *Runner) write(s string) {
+	io.WriteString(r.out, s)
 }
 
-// fileEvent records an event for n in the log file, one line without ANSI
+// logToFile records an event for n in the log file, one line without ANSI
 // codes:
 //
 //	15:12:03.501 │ Base install › Partitioning disk | Creating new GPT entries
 //
 // msg is a single line that went through oneLine or stripControl. Caller must
-// hold l.mu.
-func (l *Runner) fileEvent(sym string, n *node, msg string) {
-	if l.file == nil {
+// hold r.mu.
+func (r *Runner) logToFile(sym string, n *node, msg string) {
+	if r.file == nil {
 		return
 	}
-	line := l.now().Format("15:04:05.000") + " " + sym + " "
+	line := r.now().Format("15:04:05.000") + " " + sym + " "
 	if path := n.path(); path != "" {
 		line += path + " "
 	}
-	io.WriteString(l.file, line+"| "+msg+"\n")
+	io.WriteString(r.file, line+"| "+msg+"\n")
 }
 
-// afterEvent redraws immediately when no ticker is going to do it.
-// Caller must hold l.mu.
-func (l *Runner) afterEvent() {
-	if !l.tty || l.closed {
-		l.drawLocked()
+// redrawIfNoTicker redraws immediately when no ticker is going to do it.
+// Caller must hold r.mu.
+func (r *Runner) redrawIfNoTicker() {
+	if !r.tty || r.closed {
+		r.drawLocked()
 	}
 }
 
 type ctxKey struct{}
 
 type ctxVal struct {
-	l *Runner
-	n *node
+	runner *Runner
+	task   *node // nil: no task yet, the root level
 }
 
-// NewContext returns a context that carries l. Without a runner in the
+// NewContext returns a context that carries r. Without a runner in the
 // context, all calls in this package are no-ops.
-func NewContext(ctx context.Context, l *Runner) context.Context {
-	return context.WithValue(ctx, ctxKey{}, &ctxVal{l: l})
+func NewContext(ctx context.Context, r *Runner) context.Context {
+	return context.WithValue(ctx, ctxKey{}, &ctxVal{runner: r})
 }
 
 func from(ctx context.Context) *ctxVal {
 	v, _ := ctx.Value(ctxKey{}).(*ctxVal)
-	if v == nil || v.l == nil {
+	if v == nil || v.runner == nil {
 		return nil
 	}
 	return v
@@ -222,8 +222,38 @@ func logAt(ctx context.Context, lv level, msg string) {
 	if v == nil {
 		return
 	}
-	v.l.mu.Lock()
-	defer v.l.mu.Unlock()
-	v.l.logLocked(v.n, lv, oneLine(msg))
-	v.l.afterEvent()
+	v.runner.mu.Lock()
+	defer v.runner.mu.Unlock()
+	v.runner.logLocked(v.task, lv, oneLine(msg))
+	v.runner.redrawIfNoTicker()
+}
+
+// logLocked records a log line under n (or at the root if n is nil).
+func (r *Runner) logLocked(n *node, lv level, msg string) {
+	sym := "•"
+	switch lv {
+	case levelInfo:
+		sym = "→"
+	case levelWarn:
+		sym = "⚠"
+	case levelError:
+		sym = "✗"
+	}
+	r.logToFile(sym, n, msg)
+
+	if (lv == levelDebug && !r.verbose) || (n != nil && n.hidden) {
+		return
+	}
+
+	ln := &node{isLog: true, state: stateOK, level: lv, title: msg, parent: n, start: r.now()}
+	ln.top = ln
+	switch {
+	case n == nil, n.top.committed:
+		// What n is drawn under is already printed: the line gets its own
+		// entry, drawn at its depth.
+		r.roots = append(r.roots, ln)
+	default:
+		ln.top = n.top
+		n.children = append(n.children, ln)
+	}
 }

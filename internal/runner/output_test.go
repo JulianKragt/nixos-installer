@@ -17,7 +17,7 @@ func TestOutputWriter(t *testing.T) {
 	w := Output(ctx)
 
 	io.WriteString(w, "part")
-	if len(task.n.tail) != 0 {
+	if len(task.node.tail) != 0 {
 		t.Fatal("partial line emitted")
 	}
 	io.WriteString(w, "ial\n\033[31mred\033[0m\n")
@@ -27,11 +27,11 @@ func TestOutputWriter(t *testing.T) {
 	io.WriteString(w, "no newline at end")
 
 	want := []string{"partial", "red", "100%", "crlf", "ctrlchars tab"}
-	if strings.Join(task.n.tail, "|") != strings.Join(want, "|") {
-		t.Fatalf("tail = %q, want %q", task.n.tail, want)
+	if strings.Join(task.node.tail, "|") != strings.Join(want, "|") {
+		t.Fatalf("tail = %q, want %q", task.node.tail, want)
 	}
 	task.End(nil) // flushes the partial line
-	if got := task.n.tail[len(task.n.tail)-1]; got != "no newline at end" {
+	if got := task.node.tail[len(task.node.tail)-1]; got != "no newline at end" {
 		t.Fatalf("last = %q", got)
 	}
 }
@@ -42,11 +42,11 @@ func TestTailShownWhileRunningDroppedOnSuccess(t *testing.T) {
 	for i := 1; i <= 8; i++ {
 		fmt.Fprintf(Output(ctx), "out %d\n", i)
 	}
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"⠋ Cmd", "│ out 4", "│ out 5", "│ out 6", "│ out 7", "│ out 8"})
 
 	task.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ Cmd 0ms"})
 }
 
@@ -61,7 +61,7 @@ func TestFailureKeepsLastTwentyLines(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error")
 	}
-	h.l.draw()
+	h.r.draw()
 	got := h.screen()
 	if len(got) != 21 || !strings.HasPrefix(got[0], "✗ Cmd: exit 1") ||
 		!strings.Contains(got[1], "out 11") || !strings.Contains(got[20], "out 30") {
@@ -72,11 +72,11 @@ func TestFailureKeepsLastTwentyLines(t *testing.T) {
 func TestFileSink(t *testing.T) {
 	var out bytes.Buffer
 	f := &syncBuf{}
-	l := newRunner(Options{Out: &out, File: f}, false, nil)
+	r := newRunner(Options{Out: &out, File: f}, false, nil)
 	clk := &clock{}
 	clk.t = clk.t.Add(15*time.Hour + 12*time.Minute + 3*time.Second + 501*time.Millisecond)
-	l.now = clk.now
-	ctx := NewContext(context.Background(), l)
+	r.now = clk.now
+	ctx := NewContext(context.Background(), r)
 
 	ctx, base := Start(ctx, "Base install")
 	_ = Parallel(ctx,

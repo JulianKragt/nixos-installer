@@ -12,10 +12,10 @@ const maxLineBytes = 64 << 10
 // partial line, lets \r reset the current line (progress bars) and strips
 // ANSI and control characters. Its state is guarded by the runner's mutex.
 type outputWriter struct {
-	l   *Runner
-	n   *node // nil: root level, file only
-	buf []byte
-	cr  bool
+	runner *Runner
+	n      *node // nil: root level, file only
+	buf    []byte
+	cr     bool
 }
 
 // Output returns a writer for command output belonging to ctx's task. It
@@ -25,24 +25,24 @@ func Output(ctx context.Context) io.Writer {
 	if v == nil {
 		return io.Discard
 	}
-	l := v.l
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if v.n == nil {
-		if l.rootOut == nil {
-			l.rootOut = &outputWriter{l: l}
+	r := v.runner
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if v.task == nil {
+		if r.rootOut == nil {
+			r.rootOut = &outputWriter{runner: r}
 		}
-		return l.rootOut
+		return r.rootOut
 	}
-	if v.n.out == nil {
-		v.n.out = &outputWriter{l: l, n: v.n}
+	if v.task.out == nil {
+		v.task.out = &outputWriter{runner: r, n: v.task}
 	}
-	return v.n.out
+	return v.task.out
 }
 
 func (w *outputWriter) Write(p []byte) (int, error) {
-	w.l.mu.Lock()
-	defer w.l.mu.Unlock()
+	w.runner.mu.Lock()
+	defer w.runner.mu.Unlock()
 	for _, b := range p {
 		switch {
 		case b == '\r':
@@ -61,7 +61,7 @@ func (w *outputWriter) Write(p []byte) (int, error) {
 			}
 		}
 	}
-	w.l.afterEvent()
+	w.runner.redrawIfNoTicker()
 	return len(p), nil
 }
 
@@ -79,5 +79,5 @@ func (w *outputWriter) flushLocked() {
 			w.n.tail = w.n.tail[len(w.n.tail)-tailKept:]
 		}
 	}
-	w.l.fileEvent("│", w.n, line)
+	w.runner.logToFile("│", w.n, line)
 }

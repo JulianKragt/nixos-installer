@@ -5,14 +5,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"installer/internal/pipeline"
-	"installer/internal/runner"
-	"installer/internal/stages"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"installer/internal/pipeline"
+	"installer/internal/runner"
+	"installer/internal/stages"
 )
 
 func main() {
@@ -28,7 +29,7 @@ func run() int {
 	defer stop()
 	context.AfterFunc(ctx, stop) // restore default handling so a second Ctrl+C force-quits
 
-	opts, err := parseFlags(os.Args[1:], os.Stderr)
+	flags, err := parseFlags(os.Args[1:], os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
@@ -37,9 +38,9 @@ func run() int {
 		return 2
 	}
 
-	dir := stateDir()
-	runnerOpts := runner.Options{Out: os.Stderr, In: os.Stdin, Verbose: opts.verbose}
-	logPath, logFile, err := openLogFile(dir)
+	stateDir := defaultStateDir()
+	runnerOpts := runner.Options{Out: os.Stderr, In: os.Stdin, Verbose: flags.verbose}
+	logPath, logFile, err := openLogFile(stateDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: no log file: %v\n", err)
 	} else {
@@ -48,7 +49,7 @@ func run() int {
 	}
 
 	ui := runner.New(runnerOpts)
-	err = install(runner.NewContext(ctx, ui), opts.Inputs, dir)
+	err = install(runner.NewContext(ctx, ui), flags.Inputs, stateDir)
 	ui.Close()
 	if err != nil {
 		// The runner already showed err as a failed task.
@@ -70,8 +71,8 @@ func install(ctx context.Context, in pipeline.Inputs, stateDir string) error {
 	return pipeline.Run(ctx, env, stages.All)
 }
 
-// stateDir returns ${XDG_STATE_HOME:-~/.local/state}/nixos-installer.
-func stateDir() string {
+// defaultStateDir returns ${XDG_STATE_HOME:-~/.local/state}/nixos-installer.
+func defaultStateDir() string {
 	const app = "nixos-installer"
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {

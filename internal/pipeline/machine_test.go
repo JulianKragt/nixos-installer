@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"installer/internal/runner"
 	"os/exec"
 	"slices"
 	"strings"
 	"testing"
+
+	"installer/internal/runner"
 )
 
 // loopback is a "remote" machine whose ssh is the local shell, so the command

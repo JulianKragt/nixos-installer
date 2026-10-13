@@ -68,8 +68,8 @@ i, err := runner.Choose(ctx, "Select the install disk:", items)   // numbered li
 
 ## Files
 
-`runner.go` Runner/Options/ctx/level funcs/file sink · `task.go` nodes, Start/Run/End/Parallel · `tty.go` ticker, commit, layout · `ask.go` Ask/Choose, prompt layout and erasing · `output.go` command-output writer · `format.go` formatting helpers, colors, spinner frames.
+`runner.go` Runner/Options/ctx/ticker/level funcs/file sink · `task.go` nodes, Start/Run/End/RunSteps/Parallel · `render.go` commit, live area, layout · `ask.go` Ask/Choose, prompt layout and erasing · `output.go` command-output writer · `format.go` formatting helpers, colors, spinner frames.
 
-Tests build a Runner with `newRunner(opts, tty, size)`, a fake clock (`l.now`) and call `l.draw()` directly (see `runner_test.go` for the fake terminal; `ask_test.go` for an open question).
+Tests build a Runner with `newRunner(opts, tty, size)`, a fake clock (`r.now`) and call `r.draw()` directly (see `runner_test.go` for the fake terminal; `ask_test.go` for an open question).
 
 Not built yet (design leaves room): full plain/CI mode, handing the terminal to an interactive command (`ssh -t`).

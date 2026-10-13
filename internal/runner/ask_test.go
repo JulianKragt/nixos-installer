@@ -22,7 +22,7 @@ func askOpen(t *testing.T, h *harness, ctx context.Context, prompt string) (send
 	t.Helper()
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { pw.Close() })
-	h.l.in = bufio.NewReader(pr)
+	h.r.in = bufio.NewReader(pr)
 
 	ch := make(chan answer, 1)
 	go func() {
@@ -30,9 +30,9 @@ func askOpen(t *testing.T, h *harness, ctx context.Context, prompt string) (send
 		ch <- answer{line, err}
 	}()
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-		h.l.mu.Lock()
-		open := h.l.suspended
-		h.l.mu.Unlock()
+		h.r.mu.Lock()
+		open := h.r.suspended
+		h.r.mu.Unlock()
 		if open {
 			break
 		}
@@ -45,9 +45,9 @@ func askOpen(t *testing.T, h *harness, ctx context.Context, prompt string) (send
 			pw.Close() // EOF: nothing is echoed
 			return
 		}
-		h.l.mu.Lock()
+		h.r.mu.Lock()
 		h.buf.WriteString(s)
-		h.l.mu.Unlock()
+		h.r.mu.Unlock()
 		io.WriteString(pw, s)
 	}
 	return send, ch
@@ -56,14 +56,14 @@ func askOpen(t *testing.T, h *harness, ctx context.Context, prompt string) (send
 func TestAskShowsQuestionInTaskAndErasesIt(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	ctx, task := Start(h.ctx, "Task")
-	h.l.draw()
+	h.r.draw()
 
 	send, done := askOpen(t, h, ctx, "Pick one:\n  1) a\nNumber: ")
 	eq(t, squash(h.screen()), []string{"⠙ Task", "  ? Pick one:", "      1) a", "    Number:"})
 	if !strings.Contains(h.buf.String(), yellow+"?"+reset+" Pick one:") {
 		t.Errorf("question mark not coloured: %q", h.buf.String())
 	}
-	h.l.draw() // the live area is frozen while the question is open
+	h.r.draw() // the live area is frozen while the question is open
 	eq(t, squash(h.screen()), []string{"⠙ Task", "  ? Pick one:", "      1) a", "    Number:"})
 
 	send("1\n")
@@ -77,7 +77,7 @@ func TestAskShowsQuestionInTaskAndErasesIt(t *testing.T) {
 	}
 
 	task.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ Task 0ms"})
 }
 
@@ -85,7 +85,7 @@ func TestAskErasesWrappedQuestion(t *testing.T) {
 	h := newTTY(t, 20, 24, false)
 	h.wrap = 20
 	ctx, _ := Start(h.ctx, "Task")
-	h.l.draw()
+	h.r.draw()
 
 	// "  ? " + 30 runes wraps onto a second row of the 20-column terminal.
 	send, done := askOpen(t, h, ctx, strings.Repeat("x", 30))
@@ -100,7 +100,7 @@ func TestAskErasesWrappedQuestion(t *testing.T) {
 func TestAskEOFLeavesNoQuestionBehind(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	ctx, _ := Start(h.ctx, "Task")
-	h.l.draw()
+	h.r.draw()
 
 	send, done := askOpen(t, h, ctx, "Name: ")
 	send("")
@@ -114,7 +114,7 @@ func TestAskCancelled(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	ctx, cancel := context.WithCancel(h.ctx)
 	ctx, _ = Start(ctx, "Task")
-	h.l.draw()
+	h.r.draw()
 
 	_, done := askOpen(t, h, ctx, "Name: ")
 	cancel()
@@ -126,8 +126,8 @@ func TestAskCancelled(t *testing.T) {
 
 func TestAskNonTTYSaysWhereItIs(t *testing.T) {
 	var buf bytes.Buffer
-	l := newRunner(Options{Out: &buf, In: strings.NewReader("yes")}, false, nil)
-	root := NewContext(context.Background(), l)
+	r := newRunner(Options{Out: &buf, In: strings.NewReader("yes")}, false, nil)
+	root := NewContext(context.Background(), r)
 	ctx, _ := Start(root, "Task")
 
 	// A last line without newline still counts as an answer.
@@ -173,8 +173,8 @@ func TestChoose(t *testing.T) {
 		{"", 0, "read selection"},
 	} {
 		var buf bytes.Buffer
-		l := newRunner(Options{Out: &buf, In: strings.NewReader(c.input)}, false, nil)
-		got, err := Choose(NewContext(context.Background(), l), "Pick:", items)
+		r := newRunner(Options{Out: &buf, In: strings.NewReader(c.input)}, false, nil)
+		got, err := Choose(NewContext(context.Background(), r), "Pick:", items)
 		if c.wantErr != "" {
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Errorf("%q: err = %v, want containing %q", c.input, err, c.wantErr)
@@ -219,8 +219,8 @@ func TestAskSecretReadsALineFromAPipe(t *testing.T) {
 
 	// A pipe is an *os.File like a terminal, but has no echo to turn off.
 	file := &syncBuf{}
-	l := newRunner(Options{In: pr, File: file}, false, nil)
-	got, err := AskSecret(NewContext(context.Background(), l), "Password: ")
+	r := newRunner(Options{In: pr, File: file}, false, nil)
+	got, err := AskSecret(NewContext(context.Background(), r), "Password: ")
 	if got != "hunter2" || err != nil {
 		t.Fatalf("answer = %q, %v", got, err)
 	}

@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"installer/internal/runner"
 	"io"
 	"os/exec"
 	"slices"
 	"strings"
+
+	"installer/internal/runner"
 )
 
 // Machine runs commands on a machine: this one (the zero value) or another

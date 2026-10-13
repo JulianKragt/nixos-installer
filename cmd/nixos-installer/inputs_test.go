@@ -3,13 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
-	"installer/internal/pipeline"
-	"installer/internal/runner"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"installer/internal/pipeline"
+	"installer/internal/runner"
 )
 
 // operator returns a context whose runner reads the operator's answers from

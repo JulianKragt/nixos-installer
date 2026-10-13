@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"installer/internal/pipeline"
-	"installer/internal/runner"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"installer/internal/pipeline"
+	"installer/internal/runner"
 )
 
 // resolveInputs asks for whatever the flags left empty (target, config, host) and
@@ -18,25 +19,31 @@ import (
 // name. in is completed in place.
 func resolveInputs(ctx context.Context, in *pipeline.Inputs, stateDir string) (*pipeline.State, error) {
 	var st *pipeline.State
-	err := runner.Run(ctx, "Checking inputs", func(ctx context.Context) (err error) {
-		if in.Target, err = askTarget(ctx, in.Target); err != nil {
-			return err
-		}
-		if in.ConfigDir, err = askConfigDir(ctx, in.ConfigDir); err != nil {
-			return err
-		}
-		hosts, err := listHosts(in.ConfigDir)
+	err := runner.Run(ctx, "Checking inputs", func(ctx context.Context) error {
+		target, err := askTarget(ctx, in.Target)
 		if err != nil {
 			return err
 		}
-		if in.Host, err = pickHost(ctx, hosts, in.Host); err != nil {
+		configDir, err := askConfigDir(ctx, in.ConfigDir)
+		if err != nil {
 			return err
 		}
-		if st, err = pipeline.LoadState(stateDir, in.Host); err != nil {
+		hosts, err := listHosts(configDir)
+		if err != nil {
 			return err
 		}
-		runner.Info(ctx, "Target: "+in.Target)
-		runner.Info(ctx, "Host: "+in.Host)
+		host, err := pickHost(ctx, hosts, in.Host)
+		if err != nil {
+			return err
+		}
+		in.Target, in.ConfigDir, in.Host = target, configDir, host
+
+		st, err = pipeline.LoadState(stateDir, host)
+		if err != nil {
+			return err
+		}
+		runner.Info(ctx, "Target: "+target)
+		runner.Info(ctx, "Host: "+host)
 		return nil
 	})
 	return st, err

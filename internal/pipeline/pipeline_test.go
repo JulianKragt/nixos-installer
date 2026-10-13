@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"installer/internal/runner"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"installer/internal/runner"
 )
 
 // fake is a stage that records that it ran.

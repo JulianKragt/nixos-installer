@@ -17,7 +17,6 @@ const (
 	stateRunning nodeState = iota
 	stateOK
 	stateFailed
-	stateLog // a log line: never runs, has no children
 )
 
 const tailKept = 20
@@ -29,7 +28,8 @@ var (
 
 // node is a task or a log line. Command output lives in a task's tail.
 type node struct {
-	title    string
+	title    string // of a task; the message of a log line
+	isLog    bool   // a log line: never runs, has no children
 	level    level
 	parent   *node
 	top      *node // the entry of Runner.roots that n is drawn under; n itself for an entry
@@ -73,8 +73,8 @@ func (n *node) finished() bool { return n.state != stateRunning }
 // Task is a handle on a running task. It only handles lifecycle; logging
 // goes through the context returned by Start.
 type Task struct {
-	l *Runner
-	n *node
+	runner *Runner
+	node   *node
 }
 
 // Start begins a task as a child of ctx's task, or as a root. The returned
@@ -94,59 +94,60 @@ func start(ctx context.Context, title string, lv level) (context.Context, *Task)
 	if v == nil {
 		return ctx, &Task{}
 	}
-	l := v.l
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	r := v.runner
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	n := &node{
 		title:  oneLine(title),
 		level:  lv,
-		parent: v.n,
-		start:  l.now(),
+		parent: v.task,
+		start:  r.now(),
 	}
 	n.top = n
-	n.hidden = (lv == levelDebug && !l.verbose) || (v.n != nil && v.n.hidden)
+	n.hidden = (lv == levelDebug && !r.verbose) || (v.task != nil && v.task.hidden)
 
 	switch {
 	case n.hidden:
-	case v.n == nil, v.n.state != stateRunning:
+		// Drawn nowhere; only the log file sees it.
+	case v.task == nil, v.task.state != stateRunning:
 		// A task under a parent that already ended gets its own entry, drawn
 		// at its depth below everything that started before it.
-		l.roots = append(l.roots, n)
+		r.roots = append(r.roots, n)
 	default:
-		n.top = v.n.top
-		v.n.children = append(v.n.children, n)
+		n.top = v.task.top
+		v.task.children = append(v.task.children, n)
 	}
 
-	l.fileEvent("▸", n, "started")
-	l.afterEvent()
-	return context.WithValue(ctx, ctxKey{}, &ctxVal{l: l, n: n}), &Task{l: l, n: n}
+	r.logToFile("▸", n, "started")
+	r.redrawIfNoTicker()
+	return context.WithValue(ctx, ctxKey{}, &ctxVal{runner: r, task: n}), &Task{runner: r, node: n}
 }
 
 // End finishes the task: ✓ if err is nil, else ✗ with the error.
 func (t *Task) End(err error) {
-	if t == nil || t.l == nil {
+	if t == nil || t.runner == nil {
 		return
 	}
-	t.l.mu.Lock()
-	defer t.l.mu.Unlock()
-	t.l.endLocked(t.n, err)
-	t.l.afterEvent()
+	t.runner.mu.Lock()
+	defer t.runner.mu.Unlock()
+	t.runner.endLocked(t.node, err)
+	t.runner.redrawIfNoTicker()
 }
 
 // endLocked finishes n and closes tasks still running below it as failed.
-func (l *Runner) endLocked(n *node, err error) {
+func (r *Runner) endLocked(n *node, err error) {
 	if n.state != stateRunning {
 		return
 	}
 	for _, c := range n.children {
-		l.endLocked(c, errParentEnded)
+		r.endLocked(c, errParentEnded)
 	}
 	if n.out != nil {
 		n.out.flushLocked()
 	}
 
-	n.end = l.now()
+	n.end = r.now()
 	n.err = err
 	n.state = stateOK
 	if err != nil {
@@ -157,7 +158,7 @@ func (l *Runner) endLocked(n *node, err error) {
 	if err != nil {
 		sym, msg = "✗", failedTitle(n)
 	}
-	l.fileEvent(sym, n, msg)
+	r.logToFile(sym, n, msg)
 }
 
 // failedTitle is the text of a failed task line.
@@ -171,36 +172,6 @@ func failedTitle(n *node) string {
 		return n.title + " (runner closed)"
 	}
 	return n.title + ": " + oneLine(n.err.Error())
-}
-
-// logLocked records a log line under n (or at the root if n is nil).
-func (l *Runner) logLocked(n *node, lv level, msg string) {
-	sym := "•"
-	switch lv {
-	case levelInfo:
-		sym = "→"
-	case levelWarn:
-		sym = "⚠"
-	case levelError:
-		sym = "✗"
-	}
-	l.fileEvent(sym, n, msg)
-
-	if (lv == levelDebug && !l.verbose) || (n != nil && n.hidden) {
-		return
-	}
-
-	ln := &node{state: stateLog, level: lv, title: msg, parent: n, start: l.now()}
-	ln.top = ln
-	switch {
-	case n == nil, n.top.committed:
-		// What n is drawn under is already printed: the line gets its own
-		// entry, drawn at its depth.
-		l.roots = append(l.roots, ln)
-	default:
-		ln.top = n.top
-		n.children = append(n.children, ln)
-	}
 }
 
 // Run starts a task, runs fn with its context and ends the task.
@@ -227,6 +198,12 @@ func panicError(r any, withStack bool) error {
 	return fmt.Errorf("panic: %v\n%s", r, buf[:n])
 }
 
+// Step is one unit of work for Parallel and RunSteps.
+type Step struct {
+	Title string
+	Fn    func(context.Context) error
+}
+
 // RunSteps runs the steps one after another with Run and stops at the first
 // error, which it returns.
 func RunSteps(ctx context.Context, steps ...Step) error {
@@ -236,12 +213,6 @@ func RunSteps(ctx context.Context, steps ...Step) error {
 		}
 	}
 	return nil
-}
-
-// Step is one unit of work for Parallel and RunSteps.
-type Step struct {
-	Title string
-	Fn    func(context.Context) error
 }
 
 // Parallel runs the steps concurrently, each as its own child task of ctx's
@@ -288,15 +259,15 @@ func Parallel(ctx context.Context, steps ...Step) error {
 	}
 	wg.Wait()
 
-	var out []error
+	var failed []error
 	for _, err := range errs {
 		if err == nil || errors.Is(err, context.Canceled) {
 			continue
 		}
-		out = append(out, err)
+		failed = append(failed, err)
 	}
-	if len(out) > 0 {
-		return errors.Join(out...)
+	if len(failed) > 0 {
+		return errors.Join(failed...)
 	}
 	return parent.Err()
 }

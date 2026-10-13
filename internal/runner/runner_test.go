@@ -95,7 +95,7 @@ func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 type harness struct {
 	buf  bytes.Buffer
-	l    *Runner
+	r    *Runner
 	clk  *clock
 	ctx  context.Context
 	wrap int // screen() wraps at this column; 0 = never
@@ -104,9 +104,9 @@ type harness struct {
 func newTTY(t *testing.T, w, h int, verbose bool) *harness {
 	t.Helper()
 	hn := &harness{clk: &clock{t: time.Date(2026, 1, 1, 15, 12, 3, 0, time.UTC)}}
-	hn.l = newRunner(Options{Out: &hn.buf, Verbose: verbose}, true, func() (int, int) { return w, h })
-	hn.l.now = hn.clk.now
-	hn.ctx = NewContext(context.Background(), hn.l)
+	hn.r = newRunner(Options{Out: &hn.buf, Verbose: verbose}, true, func() (int, int) { return w, h })
+	hn.r.now = hn.clk.now
+	hn.ctx = NewContext(context.Background(), hn.r)
 	return hn
 }
 
@@ -140,15 +140,15 @@ func TestParentStaysAboveChildren(t *testing.T) {
 	_ = Run(ctx, "Child A", func(context.Context) error { return nil })
 	_ = Run(ctx, "Child B", func(context.Context) error { return errors.New("boom") })
 
-	h.l.draw()
+	h.r.draw()
 	got := squash(h.screen())
 	eq(t, got, []string{"⠋ Parent", "  ✓ Child A 0ms", "  ✗ Child B: boom 0ms"})
 
 	parent.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ Parent 0ms", "  ✓ Child A 0ms", "  ✗ Child B: boom 0ms"})
-	if h.l.liveLines != 0 {
-		t.Fatalf("liveLines = %d, want 0", h.l.liveLines)
+	if h.r.liveLines != 0 {
+		t.Fatalf("liveLines = %d, want 0", h.r.liveLines)
 	}
 }
 
@@ -157,7 +157,7 @@ func TestParallelSpinnersAndStartOrder(t *testing.T) {
 	ctx, root := Start(h.ctx, "Root")
 	_, a := Start(ctx, "A")
 	_, b := Start(ctx, "B")
-	h.l.draw()
+	h.r.draw()
 	got := squash(h.screen())
 	eq(t, got, []string{"⠋ Root", "  ⠋ A", "  ⠋ B"})
 
@@ -165,7 +165,7 @@ func TestParallelSpinnersAndStartOrder(t *testing.T) {
 	h.clk.advance(1500 * time.Millisecond)
 	a.End(nil)
 	root.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ Root 1.5s", "  ✓ A 1.5s", "  ✓ B 0ms"})
 }
 
@@ -174,17 +174,17 @@ func TestRootFinishingEarlyStaysLive(t *testing.T) {
 	_, a := Start(h.ctx, "A")
 	_, b := Start(h.ctx, "B")
 	b.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"⠋ A", "✓ B 0ms"})
-	if h.l.committed != 0 {
+	if h.r.numCommitted != 0 {
 		t.Fatal("B committed before A")
 	}
 
 	a.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ A 0ms", "✓ B 0ms"})
-	if h.l.committed != 2 || h.l.liveLines != 0 {
-		t.Fatalf("committed=%d live=%d", h.l.committed, h.l.liveLines)
+	if h.r.numCommitted != 2 || h.r.liveLines != 0 {
+		t.Fatalf("committed=%d live=%d", h.r.numCommitted, h.r.liveLines)
 	}
 }
 
@@ -193,11 +193,11 @@ func TestLiveRedrawIsInPlace(t *testing.T) {
 	Info(h.ctx, "first")
 	_, a := Start(h.ctx, "A")
 	for i := 0; i < 5; i++ {
-		h.l.draw()
+		h.r.draw()
 	}
 	eq(t, squash(h.screen()), []string{"✓ first", "⠼ A"})
 	a.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ first", "✓ A 0ms"})
 }
 
@@ -207,12 +207,12 @@ func TestHeightOverflow(t *testing.T) {
 	for i := 1; i <= 8; i++ {
 		_ = Run(ctx, fmt.Sprintf("step %d", i), func(context.Context) error { return nil })
 	}
-	h.l.draw()
+	h.r.draw()
 	got := squash(h.screen())
 	eq(t, got, []string{"⠋ Root", "  … 5 lines", "  ✓ step 6 0ms", "  ✓ step 7 0ms", "  ✓ step 8 0ms"})
 
 	root.End(nil)
-	h.l.draw()
+	h.r.draw()
 	got = h.screen()
 	if len(got) != 9 || !strings.Contains(got[1], "step 1") || !strings.Contains(got[8], "step 8") {
 		t.Fatalf("commit not in full:\n%s", strings.Join(got, "\n"))
@@ -224,10 +224,10 @@ func TestLinesNeverWrap(t *testing.T) {
 	_, task := Start(h.ctx, strings.Repeat("long title ", 10))
 	Info(task2ctx(h.ctx, task), "x")
 	h.clk.advance(5 * time.Second)
-	h.l.draw()
-	h.l.mu.Lock()
-	live := h.l.liveRender()
-	h.l.mu.Unlock()
+	h.r.draw()
+	h.r.mu.Lock()
+	live := h.r.liveRender()
+	h.r.mu.Unlock()
 	for _, s := range live {
 		plain := ansiRE.ReplaceAllString(s, "")
 		if runeLen(plain) > 29 {
@@ -238,7 +238,7 @@ func TestLinesNeverWrap(t *testing.T) {
 
 // task2ctx is a helper to log into a task created without keeping its ctx.
 func task2ctx(ctx context.Context, t *Task) context.Context {
-	return context.WithValue(ctx, ctxKey{}, &ctxVal{l: t.l, n: t.n})
+	return context.WithValue(ctx, ctxKey{}, &ctxVal{runner: t.runner, task: t.node})
 }
 
 func TestParentEndedClosesChildren(t *testing.T) {
@@ -246,7 +246,7 @@ func TestParentEndedClosesChildren(t *testing.T) {
 	ctx, parent := Start(h.ctx, "Parent")
 	Start(ctx, "Orphaned")
 	parent.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ Parent 0ms", "  ✗ Orphaned (parent ended) 0ms"})
 }
 
@@ -254,11 +254,11 @@ func TestLogAfterCommit(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	ctx, task := Start(h.ctx, "Task")
 	task.End(nil)
-	h.l.draw()
+	h.r.draw()
 	Warn(ctx, "late")
 	_, late := Start(ctx, "late task")
 	late.End(nil)
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ Task 0ms", "  ⚠ late", "  ✓ late task 0ms"})
 }
 
@@ -266,32 +266,32 @@ func TestLateTaskIsLiveUntilItEnds(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	ctx, task := Start(h.ctx, "Task")
 	task.End(nil)
-	h.l.draw()
+	h.r.draw()
 
 	ctx, late := Start(ctx, "late task")
 	Info(ctx, "inside")
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ Task 0ms", "  ⠙ late task", "    → inside"})
 
 	late.End(nil)
-	h.l.draw()
+	h.r.draw()
 	Info(ctx, "after")
-	h.l.draw()
+	h.r.draw()
 	eq(t, squash(h.screen()), []string{"✓ Task 0ms", "  ✓ late task 0ms", "    → inside", "    → after"})
-	if h.l.liveLines != 0 {
-		t.Fatalf("liveLines = %d, want 0", h.l.liveLines)
+	if h.r.liveLines != 0 {
+		t.Fatalf("liveLines = %d, want 0", h.r.liveLines)
 	}
 }
 
 func TestElapsedAfterOneSecond(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	Start(h.ctx, "slow")
-	h.l.draw()
+	h.r.draw()
 	if strings.Contains(h.screen()[0], "s") && strings.Contains(h.screen()[0], "ms") {
 		t.Fatal("duration shown too early")
 	}
 	h.clk.advance(2*time.Minute + 3*time.Second)
-	h.l.draw()
+	h.r.draw()
 	if !strings.HasSuffix(h.screen()[0], "2m03s") {
 		t.Fatalf("got %q", h.screen()[0])
 	}
@@ -313,14 +313,14 @@ func TestDurationFormat(t *testing.T) {
 func TestColorsOnTTY(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	_ = Run(h.ctx, "ok", func(context.Context) error { return nil })
-	h.l.draw()
+	h.r.draw()
 	out := h.buf.String()
 	for _, want := range []string{green + "✓" + reset, "\033[?25l"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in %q", want, out)
 		}
 	}
-	h.l.Close()
+	h.r.Close()
 	if !strings.HasSuffix(h.buf.String(), "\033[?25h") {
 		t.Error("cursor not restored on Close")
 	}
@@ -328,8 +328,8 @@ func TestColorsOnTTY(t *testing.T) {
 
 func TestNonTTY(t *testing.T) {
 	var buf bytes.Buffer
-	l := newRunner(Options{Out: &buf}, false, nil)
-	ctx := NewContext(context.Background(), l)
+	r := newRunner(Options{Out: &buf}, false, nil)
+	ctx := NewContext(context.Background(), r)
 	ctx1, a := Start(ctx, "A")
 	_, b := Start(ctx, "B")
 	fmt.Fprintln(Output(ctx1), "hidden while running")
@@ -349,7 +349,7 @@ func TestNonTTY(t *testing.T) {
 func TestCloseEndsRunningTasks(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	Start(h.ctx, "left running")
-	h.l.Close()
+	h.r.Close()
 	eq(t, squash(h.screen()), []string{"✗ left running (runner closed) 0ms"})
 }
 
@@ -362,7 +362,7 @@ func TestDebugHiddenUnlessVerbose(t *testing.T) {
 		d.End(nil)
 		Debug(h.ctx, "debug line")
 		_ = Run(h.ctx, "visible", func(context.Context) error { return nil })
-		h.l.draw()
+		h.r.draw()
 		got := squash(h.screen())
 		if !verbose {
 			eq(t, got, []string{"✓ visible 0ms"})
@@ -392,8 +392,8 @@ func TestNoRunnerIsNoop(t *testing.T) {
 
 func TestEndFailureMessage(t *testing.T) {
 	var buf bytes.Buffer
-	l := newRunner(Options{Out: &buf}, false, nil)
-	ctx := NewContext(context.Background(), l)
+	r := newRunner(Options{Out: &buf}, false, nil)
+	ctx := NewContext(context.Background(), r)
 	err := Run(ctx, "Disk", func(context.Context) error { return errors.New("no space\nleft") })
 	if err == nil || !strings.Contains(buf.String(), "✗ Disk: no space; left") {
 		t.Fatalf("got %q", buf.String())
@@ -402,8 +402,8 @@ func TestEndFailureMessage(t *testing.T) {
 
 func TestParallelCancelsSiblingsAndJoinsErrors(t *testing.T) {
 	var buf bytes.Buffer
-	l := newRunner(Options{Out: &buf}, false, nil)
-	ctx := NewContext(context.Background(), l)
+	r := newRunner(Options{Out: &buf}, false, nil)
+	ctx := NewContext(context.Background(), r)
 
 	var mu sync.Mutex
 	sawCancel := false
@@ -445,8 +445,8 @@ func TestParallelCancelsSiblingsAndJoinsErrors(t *testing.T) {
 
 func TestParallelRace(t *testing.T) {
 	var buf bytes.Buffer
-	l := newRunner(Options{Out: &buf, File: &syncBuf{}}, false, nil)
-	ctx := NewContext(context.Background(), l)
+	r := newRunner(Options{Out: &buf, File: &syncBuf{}}, false, nil)
+	ctx := NewContext(context.Background(), r)
 	steps := make([]Step, 20)
 	for i := range steps {
 		steps[i] = Step{fmt.Sprintf("s%d", i), func(ctx context.Context) error {

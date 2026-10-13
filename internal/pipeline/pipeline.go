@@ -6,8 +6,9 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"installer/internal/runner"
 	"slices"
+
+	"installer/internal/runner"
 )
 
 // Inputs are the operator's choices for this run. They are complete before
@@ -51,21 +52,27 @@ func Run(ctx context.Context, env *Env, stages []Stage) error {
 			runner.Info(ctx, title+" (done earlier)")
 			continue
 		}
-		if err := runner.Run(ctx, title, func(ctx context.Context) error {
-			if err := s.Run(ctx, env); err != nil {
-				return err
-			}
-			if s.Always {
-				return nil // re-run every time, never recorded
-			}
-			env.State.Completed = append(env.State.Completed, s.ID)
-			if err := env.State.Save(); err != nil {
-				return fmt.Errorf("persist state: %w", err)
-			}
-			return nil
-		}); err != nil {
+		err := runner.Run(ctx, title, func(ctx context.Context) error {
+			return runStage(ctx, env, s)
+		})
+		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// runStage runs s and records it as completed.
+func runStage(ctx context.Context, env *Env, s Stage) error {
+	if err := s.Run(ctx, env); err != nil {
+		return err
+	}
+	if s.Always {
+		return nil // re-run every time, never recorded
+	}
+	env.State.Completed = append(env.State.Completed, s.ID)
+	if err := env.State.Save(); err != nil {
+		return fmt.Errorf("persist state: %w", err)
 	}
 	return nil
 }

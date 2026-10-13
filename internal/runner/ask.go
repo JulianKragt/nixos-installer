@@ -20,11 +20,11 @@ func Ask(ctx context.Context, prompt string) (string, error) {
 	if v == nil {
 		return "", io.EOF
 	}
-	l := v.l
+	r := v.runner
 
-	shown := l.beginPrompt(v.n, prompt)
-	line, err := l.readLine(ctx)
-	l.endPrompt(shown, line, err)
+	shown := r.beginPrompt(v.task, prompt)
+	line, err := r.readLine(ctx)
+	r.endPrompt(shown, line, err)
 	return line, err
 }
 
@@ -37,20 +37,20 @@ func AskSecret(ctx context.Context, prompt string) (string, error) {
 	if v == nil {
 		return "", io.EOF
 	}
-	l := v.l
-	shown := l.beginPrompt(v.n, prompt)
-	pw, err := l.readSecret(ctx)
-	l.endPrompt(shown, "", err)
+	r := v.runner
+	shown := r.beginPrompt(v.task, prompt)
+	pw, err := r.readSecret(ctx)
+	r.endPrompt(shown, "", err)
 	return pw, err
 }
 
 // readSecret reads one line without echo. It uses term.ReadPassword when the
 // input is a terminal file; otherwise it falls back to readLine.
-func (l *Runner) readSecret(ctx context.Context) (string, error) {
-	if l.inFile == nil {
-		return l.readLine(ctx)
+func (r *Runner) readSecret(ctx context.Context) (string, error) {
+	if r.inFile == nil {
+		return r.readLine(ctx)
 	}
-	fd := int(l.inFile.Fd())
+	fd := int(r.inFile.Fd())
 	state, _ := term.GetState(fd) // capture before ReadPassword sets raw mode
 	pw, err := runInterruptible(ctx, func() ([]byte, error) {
 		return term.ReadPassword(fd)
@@ -63,9 +63,9 @@ func (l *Runner) readSecret(ctx context.Context) (string, error) {
 	}
 	// term.ReadPassword suppresses the newline; emit one so the cursor is on a
 	// fresh line before endPrompt erases the prompt.
-	l.mu.Lock()
-	l.write("\n")
-	l.mu.Unlock()
+	r.mu.Lock()
+	r.write("\n")
+	r.mu.Unlock()
 	return string(pw), nil
 }
 
@@ -90,67 +90,66 @@ func Choose(ctx context.Context, header string, items []string) (int, error) {
 
 // beginPrompt freezes the live area and prints the question inside task n. It
 // returns the question as laid out, without ANSI codes, for endPrompt.
-func (l *Runner) beginPrompt(n *node, text string) string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.drawLocked()
-	l.suspended = true
-	if l.tty && l.cursorHidden {
-		l.write("\033[?25h")
-		l.cursorHidden = false
+func (r *Runner) beginPrompt(n *node, text string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.drawLocked()
+	r.suspended = true
+	if r.tty && r.cursorHidden {
+		r.write(showCursor)
+		r.cursorHidden = false
 	}
 	depth := 0
 	if n != nil {
 		depth = n.depth() + 1 // same indentation as log lines of this task
-		if !l.tty {
+		if !r.tty {
 			// Nothing is rendered until a task finishes; say where we are.
-			l.write("▸ " + n.path() + "\n")
+			r.write("▸ " + n.path() + "\n")
 		}
 	}
-	plain := layoutPrompt(text, depth)
-	if l.tty {
-		pad := len(indent(depth))
-		l.write(plain[:pad] + yellow + "?" + reset + plain[pad+1:])
+	plain := layoutPrompt(text, depth, "?")
+	if r.tty {
+		r.write(layoutPrompt(text, depth, yellow+"?"+reset))
 	} else {
-		l.write(plain)
+		r.write(plain)
 	}
 	return plain
 }
 
 // endPrompt erases the question and answer again and thaws the live area.
-func (l *Runner) endPrompt(plain, line string, readErr error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.tty {
+func (r *Runner) endPrompt(plain, line string, readErr error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.tty {
 		if readErr != nil && line == "" {
 			// no newline was echoed (EOF or cancelled)
-			l.write("\n")
+			r.write("\n")
 		}
-		width, _ := l.size()
+		width, _ := r.size()
 		if width <= 0 {
 			width = 80
 		}
-		l.write(fmt.Sprintf("\033[%dA\r\033[J", promptLines(plain+line, width)))
+		r.write(cursorUp(promptLines(plain+line, width)) + clearDown)
 	}
-	l.suspended = false
-	l.drawLocked()
+	r.suspended = false
+	r.drawLocked()
 }
 
-// layoutPrompt indents prompt like a log line with a "?" symbol; continuation
-// lines are aligned under the text.
-func layoutPrompt(prompt string, depth int) string {
+// layoutPrompt indents prompt like a log line with sym, a "?" with or without
+// colour, as its symbol; continuation lines are aligned under the text.
+func layoutPrompt(prompt string, depth int, sym string) string {
 	pad := indent(depth)
-	return pad + "? " + strings.ReplaceAll(prompt, "\n", "\n"+pad+"  ")
+	return pad + sym + " " + strings.ReplaceAll(prompt, "\n", "\n"+pad+"  ")
 }
 
 // readLine reads one line from the runner's input, giving up with ctx's error
 // when ctx is cancelled (Ctrl+C). The abandoned read goroutine ends with the process.
-func (l *Runner) readLine(ctx context.Context) (string, error) {
-	if l.in == nil {
+func (r *Runner) readLine(ctx context.Context) (string, error) {
+	if r.in == nil {
 		return "", io.EOF
 	}
 	line, err := runInterruptible(ctx, func() (string, error) {
-		line, err := l.in.ReadString('\n')
+		line, err := r.in.ReadString('\n')
 		return strings.TrimSpace(line), err
 	})
 	if err == io.EOF && line != "" {

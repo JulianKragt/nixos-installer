@@ -3,9 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"installer/internal/pipeline"
 	"io"
 	"net/netip"
+
+	"installer/internal/pipeline"
 )
 
 // options are the command-line inputs. Empty inputs are completed by

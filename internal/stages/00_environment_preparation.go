@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"installer/internal/pipeline"
-	"installer/internal/runner"
 	"net"
 	"os"
 	"os/exec"
@@ -13,13 +11,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"installer/internal/pipeline"
+	"installer/internal/runner"
 )
 
 // environmentPreparation checks the provider machine and the target before
 // anything touches the target, and resolves the install disk. It runs on every
 // invocation.
 func environmentPreparation(ctx context.Context, env *pipeline.Env) error {
-	var disk string
+	var disk string // set by the last step
 	steps := []runner.Step{
 		{Title: "Check local tools", Fn: checkLocalTools},
 		{Title: "Check internet connection", Fn: func(ctx context.Context) error {
@@ -34,7 +35,8 @@ func environmentPreparation(ctx context.Context, env *pipeline.Env) error {
 		{Title: "Check config flake", Fn: func(context.Context) error {
 			return checkConfig(env.ConfigDir)
 		}},
-		{Title: "Resolve install disk", Fn: func(ctx context.Context) (err error) {
+		{Title: "Resolve install disk", Fn: func(ctx context.Context) error {
+			var err error
 			disk, err = resolveDisk(ctx, env)
 			return err
 		}},
@@ -57,32 +59,34 @@ func environmentPreparation(ctx context.Context, env *pipeline.Env) error {
 // setupSSHAccess makes key auth to the target work. When it does not yet, the
 // provider's public keys are installed with the root password.
 func setupSSHAccess(ctx context.Context, env *pipeline.Env) error {
-	_, err := env.Remote.Run(ctx, "true")
-	if err == nil {
+	_, keyAuthErr := env.Remote.Run(ctx, "true")
+	if keyAuthErr == nil {
 		return nil // key auth already works
 	}
-	if !isSSHAuthError(err) {
-		return err
+	if !isSSHAuthError(keyAuthErr) {
+		return keyAuthErr
 	}
-	pw := env.SSHPassword
-	if pw == "" {
-		var askErr error
-		pw, askErr = runner.AskSecret(ctx, "SSH password for root@"+env.Target+": ")
-		if askErr != nil {
-			return fmt.Errorf("SSH password: %w", askErr)
+
+	password := env.SSHPassword
+	if password == "" {
+		var err error
+		password, err = runner.AskSecret(ctx, "SSH password for root@"+env.Target+": ")
+		if err != nil {
+			return fmt.Errorf("SSH password: %w", err)
 		}
-		if pw == "" {
-			return err
+		if password == "" {
+			return keyAuthErr
 		}
 	}
 	keys, err := collectProviderKeys(ctx, env.Local)
 	if err != nil {
 		return err
 	}
-	if err := pipeline.BootstrapKey(ctx, env.Target, pw, keys); err != nil {
-		if errors.Is(err, pipeline.ErrAuth) {
-			return fmt.Errorf("%w\n\nHint: the target rejected password auth. Set a root password first:\n  passwd root", err)
-		}
+	err = pipeline.BootstrapKey(ctx, env.Target, password, keys)
+	if errors.Is(err, pipeline.ErrAuth) {
+		return fmt.Errorf("%w\n\n%s", err, passwordRejectedHint)
+	}
+	if err != nil {
 		return err
 	}
 	if _, err := env.Remote.Run(ctx, "true"); err != nil {
@@ -90,6 +94,8 @@ func setupSSHAccess(ctx context.Context, env *pipeline.Env) error {
 	}
 	return nil
 }
+
+const passwordRejectedHint = "Hint: the target rejected password auth. Set a root password first:\n  passwd root"
 
 // collectProviderKeys returns the SSH public keys the provider should use,
 // preferring keys loaded in the SSH agent (ssh-add -L), with a fallback to

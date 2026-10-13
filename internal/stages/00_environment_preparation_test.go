@@ -2,13 +2,14 @@ package stages
 
 import (
 	"context"
-	"installer/internal/pipeline"
-	"installer/internal/runner"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"installer/internal/pipeline"
+	"installer/internal/runner"
 )
 
 func TestDialTCP(t *testing.T) {
