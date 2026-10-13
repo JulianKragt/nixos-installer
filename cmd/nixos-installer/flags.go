@@ -22,10 +22,11 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs := flag.NewFlagSet("nixos-installer", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.BoolVar(&o.verbose, "verbose", false, "Enable verbose logging")
-	fs.StringVar(&o.ConfigDir, "config", "./", "Path to the nixos-config flake")
+	fs.StringVar(&o.ConfigDir, "config", "", "Path to the nixos-config flake (prompts when empty)")
 	fs.StringVar(&o.Host, "host", "", "Host to install (prompts when empty)")
 	fs.StringVar(&o.Target, "target", "", "IP address of the target device (prompts when empty)")
 	fs.StringVar(&o.Disk, "disk", "", "Disk to install to, e.g. /dev/nvme0n1 (detected on the target when empty)")
+	fs.StringVar(&o.SSHPassword, "ssh-password", "", "Root SSH password for initial key bootstrap (prompts when empty)")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}

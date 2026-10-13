@@ -19,30 +19,58 @@ import (
 // anything touches the target, and resolves the install disk. It runs on every
 // invocation.
 func environmentPreparation(ctx context.Context, env *pipeline.Env) error {
-
 	var disk string
-	err := runner.RunSteps(ctx,
-		runner.Step{Title: "Check local tools", Fn: checkLocalTools},
-		runner.Step{Title: "Check internet connection", Fn: func(ctx context.Context) error {
+	steps := []runner.Step{
+		{Title: "Check local tools", Fn: checkLocalTools},
+		{Title: "Check internet connection", Fn: func(ctx context.Context) error {
 			return dialTCP(ctx, "8.8.8.8:53")
 		}},
-		runner.Step{Title: "Check target is reachable", Fn: func(ctx context.Context) error {
+		{Title: "Check target is reachable", Fn: func(ctx context.Context) error {
 			return dialTCP(ctx, net.JoinHostPort(env.Target, "22"))
 		}},
-		runner.Step{Title: "Check SSH connection to target", Fn: func(ctx context.Context) error {
+		{Title: "Set up SSH access", Fn: func(ctx context.Context) error {
+			_, err := env.Remote.Run(ctx, "true")
+			if err == nil {
+				return nil // key auth already works
+			}
+			if !isSSHAuthError(err) {
+				return err
+			}
+			pw := env.Inputs.SSHPassword
+			if pw == "" {
+				var askErr error
+				pw, askErr = runner.AskSecret(ctx, "SSH password for root@"+env.Target+": ")
+				if askErr != nil {
+					return fmt.Errorf("SSH password: %w", askErr)
+				}
+				if pw == "" {
+					return err
+				}
+			}
+			keys, err := collectProviderKeys(ctx, env.Local)
+			if err != nil {
+				return err
+			}
+			if err := pipeline.BootstrapKey(ctx, env.Target, pw, keys); err != nil {
+				if isSSHAuthError(err) {
+					return fmt.Errorf("%w\n\nHint: the target rejected password auth. Set a root password first:\n  passwd root", err)
+				}
+				return err
+			}
 			if _, err := env.Remote.Run(ctx, "true"); err != nil {
-				return fmt.Errorf("ssh connection to target: %w", err)
+				return fmt.Errorf("key auth after install: %w", err)
 			}
 			return nil
 		}},
-		runner.Step{Title: "Check config flake", Fn: func(context.Context) error {
+		{Title: "Check config flake", Fn: func(context.Context) error {
 			return checkConfig(env.ConfigDir)
 		}},
-		runner.Step{Title: "Resolve install disk", Fn: func(ctx context.Context) (err error) {
+		{Title: "Resolve install disk", Fn: func(ctx context.Context) (err error) {
 			disk, err = resolveDisk(ctx, env)
 			return err
 		}},
-	)
+	}
+	err := runner.RunSteps(ctx, steps...)
 	if err != nil {
 		return err
 	}
@@ -55,6 +83,44 @@ func environmentPreparation(ctx context.Context, env *pipeline.Env) error {
 	env.State.Disk = disk
 	runner.Info(ctx, "Disk: "+disk)
 	return nil
+}
+
+// collectProviderKeys returns the SSH public keys the provider should use,
+// preferring keys loaded in the SSH agent (ssh-add -L), with a fallback to
+// standard key files under ~/.ssh.
+func collectProviderKeys(ctx context.Context, local pipeline.Machine) (string, error) {
+	out, err := local.Run(ctx, "ssh-add", "-L")
+	trimmed := strings.TrimSpace(out)
+	// Some agent emulations exit 0 with "The agent has no identities." — treat
+	// that the same as an error and fall through to the file fallback.
+	if err == nil && trimmed != "" && !strings.HasPrefix(trimmed, "The agent has no identities") {
+		return out, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	var keys strings.Builder
+	for _, name := range []string{"id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"} {
+		data, err := os.ReadFile(filepath.Join(home, ".ssh", name))
+		if err == nil {
+			keys.Write(data)
+			if len(data) > 0 && data[len(data)-1] != '\n' {
+				keys.WriteByte('\n')
+			}
+		}
+	}
+	if keys.Len() == 0 {
+		return "", errors.New("no SSH public keys found in agent or ~/.ssh; load a key with ssh-add or create one")
+	}
+	return keys.String(), nil
+}
+
+// isSSHAuthError reports whether err is an SSH authentication failure (as
+// opposed to a network or host-key error). OpenSSH always appends a
+// parenthesised method list: "Permission denied (publickey,password)".
+func isSSHAuthError(err error) bool {
+	return strings.Contains(err.Error(), "Permission denied (")
 }
 
 func dialTCP(ctx context.Context, addr string) error {

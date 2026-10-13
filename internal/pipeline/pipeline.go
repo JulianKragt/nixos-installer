@@ -13,10 +13,11 @@ import (
 // Inputs are the operator's choices for this run. They are complete before
 // the first stage runs.
 type Inputs struct {
-	Host      string // host to install: a directory under hosts/nixos in the config flake
-	Target    string // IP address of the target machine
-	ConfigDir string // path to the nixos-config flake
-	Disk      string // disk to install to; empty = detect on the target
+	Host        string // host to install: a directory under hosts/nixos in the config flake
+	Target      string // IP address of the target machine
+	ConfigDir   string // path to the nixos-config flake
+	Disk        string // disk to install to; empty = detect on the target
+	SSHPassword string // root SSH password for initial key bootstrap; prompts when empty
 }
 
 // Env is everything a stage needs besides its context. Parallel steps must

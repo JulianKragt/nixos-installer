@@ -12,24 +12,23 @@ import (
 )
 
 // Machine runs commands on a machine: this one (the zero value) or another
-// one over ssh.
+// one over ssh. Authentication is always via key or ssh-agent.
 type Machine struct {
 	ssh []string // ssh argv up to and including the destination; nil = this machine
 }
 
-// SSH is the root account on the machine at addr, reached with the system's
-// ssh: keys come from ssh-agent and ~/.ssh as for any other ssh call.
+// SSH returns the root account on the machine at addr, authenticating via
+// ssh-agent and ~/.ssh keys. BatchMode=yes prevents interactive prompts.
+// TODO: replace StrictHostKeyChecking=no with TOFU once host key pinning is implemented.
 func SSH(addr string) Machine {
 	return Machine{ssh: []string{
 		"ssh",
-		"-o", "BatchMode=yes", // the runner owns the terminal: fail instead of asking
 		"-o", "ConnectTimeout=10",
-		// TODO: replace with TOFU once host key pinning is implemented
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
-		"-l", "root",
-		addr,
+		"-o", "BatchMode=yes",
+		"-l", "root", addr,
 	}}
 }
 
@@ -78,3 +77,4 @@ func lastLine(s string) string {
 	s = strings.TrimSpace(s)
 	return s[strings.LastIndexByte(s, '\n')+1:]
 }
+

@@ -6,6 +6,8 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // Ask prints prompt and reads one line from the runner's input. On a terminal
@@ -24,6 +26,47 @@ func Ask(ctx context.Context, prompt string) (string, error) {
 	line, err := l.readLine(ctx)
 	l.endPrompt(shown, line, err)
 	return line, err
+}
+
+// AskSecret is like Ask but does not echo the input. On a real terminal the
+// answer is read with term.ReadPassword; on a pipe a regular line read is used
+// as a fallback. The secret is never passed to endPrompt so it does not appear
+// in the log file.
+func AskSecret(ctx context.Context, prompt string) (string, error) {
+	v := from(ctx)
+	if v == nil {
+		return "", io.EOF
+	}
+	l := v.l
+	shown := l.beginPrompt(v.n, prompt)
+	pw, err := l.readSecret(ctx)
+	l.endPrompt(shown, "", err)
+	return pw, err
+}
+
+// readSecret reads one line without echo. It uses term.ReadPassword when the
+// input is a terminal file; otherwise it falls back to readLine.
+func (l *Runner) readSecret(ctx context.Context) (string, error) {
+	if l.inFile == nil {
+		return l.readLine(ctx)
+	}
+	fd := int(l.inFile.Fd())
+	state, _ := term.GetState(fd) // capture before ReadPassword sets raw mode
+	pw, err := runInterruptible(ctx, func() ([]byte, error) {
+		return term.ReadPassword(fd)
+	})
+	if err != nil {
+		if state != nil {
+			term.Restore(fd, state) // restore echo on cancellation
+		}
+		return "", err
+	}
+	// term.ReadPassword suppresses the newline; emit one so the cursor is on a
+	// fresh line before endPrompt erases the prompt.
+	l.mu.Lock()
+	l.write("\n")
+	l.mu.Unlock()
+	return string(pw), nil
 }
 
 // Choose shows a numbered list and returns the index the operator picks.
@@ -101,29 +144,39 @@ func layoutPrompt(prompt string, depth int) string {
 }
 
 // readLine reads one line from the runner's input, giving up with ctx's error
-// when ctx is cancelled (Ctrl+C) even though the read itself cannot be
-// interrupted. The abandoned read goroutine ends with the process.
+// when ctx is cancelled (Ctrl+C). The abandoned read goroutine ends with the process.
 func (l *Runner) readLine(ctx context.Context) (string, error) {
 	if l.in == nil {
 		return "", io.EOF
 	}
+	line, err := runInterruptible(ctx, func() (string, error) {
+		line, err := l.in.ReadString('\n')
+		return strings.TrimSpace(line), err
+	})
+	if err == io.EOF && line != "" {
+		err = nil // a last line without newline still counts as an answer
+	}
+	return line, err
+}
+
+// runInterruptible runs fn in a goroutine and returns its result, or returns
+// ctx's error when ctx is cancelled. The abandoned goroutine ends with the process.
+func runInterruptible[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 	type result struct {
-		line string
-		err  error
+		v   T
+		err error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		line, err := l.in.ReadString('\n')
-		ch <- result{strings.TrimSpace(line), err}
+		v, err := fn()
+		ch <- result{v, err}
 	}()
 	select {
 	case r := <-ch:
-		if r.err == io.EOF && r.line != "" {
-			r.err = nil // a last line without newline still counts as an answer
-		}
-		return r.line, r.err
+		return r.v, r.err
 	case <-ctx.Done():
-		return "", ctx.Err()
+		var zero T
+		return zero, ctx.Err()
 	}
 }
 

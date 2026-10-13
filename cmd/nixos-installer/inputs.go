@@ -13,13 +13,16 @@ import (
 	"strings"
 )
 
-// resolveInputs asks for whatever the flags left empty (target, host) and
+// resolveInputs asks for whatever the flags left empty (target, config, host) and
 // loads the persisted state of the chosen host, since state is keyed by host
 // name. in is completed in place.
 func resolveInputs(ctx context.Context, in *pipeline.Inputs, stateDir string) (*pipeline.State, error) {
 	var st *pipeline.State
 	err := runner.Run(ctx, "Checking inputs", func(ctx context.Context) (err error) {
 		if in.Target, err = askTarget(ctx, in.Target); err != nil {
+			return err
+		}
+		if in.ConfigDir, err = askConfigDir(ctx, in.ConfigDir); err != nil {
 			return err
 		}
 		hosts, err := listHosts(in.ConfigDir)
@@ -58,6 +61,37 @@ func askTarget(ctx context.Context, target string) (string, error) {
 		target = line
 	}
 	return target, nil
+}
+
+// askConfigDir returns dir, or asks for the nixos-config directory until it
+// holds a hosts/nixos directory when dir is empty. A leading ~ is expanded.
+func askConfigDir(ctx context.Context, dir string) (string, error) {
+	prompt := "Path to nixos-config: "
+	for dir == "" {
+		line, err := runner.Ask(ctx, prompt)
+		if errors.Is(err, io.EOF) {
+			return "", errors.New("--config is required")
+		}
+		if err != nil {
+			return "", err
+		}
+		line = expandHome(strings.TrimSpace(line))
+		if fi, err := os.Stat(filepath.Join(line, "hosts", "nixos")); line == "" || err != nil || !fi.IsDir() {
+			prompt = fmt.Sprintf("Path to nixos-config (%q has no hosts/nixos): ", line)
+			continue
+		}
+		dir = line
+	}
+	return filepath.Abs(expandHome(dir))
+}
+
+func expandHome(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[1:])
+		}
+	}
+	return p
 }
 
 // listHosts returns the hosts that are valid install targets: directories

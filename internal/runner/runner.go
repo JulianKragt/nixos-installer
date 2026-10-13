@@ -47,6 +47,7 @@ type Runner struct {
 	mu      sync.Mutex
 	out     io.Writer
 	in      *bufio.Reader // nil: nobody to ask
+	inFile  *os.File      // non-nil when in is a real terminal file, for ReadPassword
 	file    io.Writer     // nil: no log file
 	verbose bool
 	now     func() time.Time
@@ -111,6 +112,9 @@ func newRunner(opts Options, tty bool, size func() (int, int)) *Runner {
 	}
 	if opts.In != nil {
 		l.in = bufio.NewReader(opts.In)
+		if f, ok := opts.In.(*os.File); ok {
+			l.inFile = f
+		}
 	}
 	return l
 }
