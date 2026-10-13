@@ -3,7 +3,6 @@ package runner
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,42 +19,6 @@ const (
 )
 
 var spinnerFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
-// format renders a message with its args. Args are treated as alternating
-// key/value pairs and appended as " key=value" after the message.
-func format(message string, args []any) string {
-	if len(args) == 0 {
-		return message
-	}
-
-	var b strings.Builder
-	b.WriteString(message)
-
-	for i := 0; i < len(args); i += 2 {
-		b.WriteByte(' ')
-		b.WriteString(fmt.Sprint(args[i]))
-		b.WriteByte('=')
-
-		if i+1 >= len(args) {
-			b.WriteString("<missing>")
-			break
-		}
-
-		b.WriteString(formatValue(args[i+1]))
-	}
-
-	return b.String()
-}
-
-// formatValue quotes values that are empty or contain spaces, so they stay
-// readable in key=value output.
-func formatValue(v any) string {
-	s := fmt.Sprint(v)
-	if s == "" || strings.ContainsAny(s, " \t\"=") {
-		return strconv.Quote(s)
-	}
-	return s
-}
 
 func indent(depth int) string {
 	return strings.Repeat("  ", depth)

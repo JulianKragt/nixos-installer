@@ -144,7 +144,7 @@ func TestParentStaysAboveChildren(t *testing.T) {
 	got := squash(h.screen())
 	eq(t, got, []string{"⠋ Parent", "  ✓ Child A 0ms", "  ✗ Child B: boom 0ms"})
 
-	parent.Done()
+	parent.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ Parent 0ms", "  ✓ Child A 0ms", "  ✗ Child B: boom 0ms"})
 	if h.l.liveLines != 0 {
@@ -161,10 +161,10 @@ func TestParallelSpinnersAndStartOrder(t *testing.T) {
 	got := squash(h.screen())
 	eq(t, got, []string{"⠋ Root", "  ⠋ A", "  ⠋ B"})
 
-	b.Done()
+	b.End(nil)
 	h.clk.advance(1500 * time.Millisecond)
-	a.Done()
-	root.Done()
+	a.End(nil)
+	root.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ Root 1.5s", "  ✓ A 1.5s", "  ✓ B 0ms"})
 }
@@ -173,14 +173,14 @@ func TestRootFinishingEarlyStaysLive(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	_, a := Start(h.ctx, "A")
 	_, b := Start(h.ctx, "B")
-	b.Done()
+	b.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"⠋ A", "✓ B 0ms"})
 	if h.l.committed != 0 {
 		t.Fatal("B committed before A")
 	}
 
-	a.Done()
+	a.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ A 0ms", "✓ B 0ms"})
 	if h.l.committed != 2 || h.l.liveLines != 0 {
@@ -196,7 +196,7 @@ func TestLiveRedrawIsInPlace(t *testing.T) {
 		h.l.draw()
 	}
 	eq(t, squash(h.screen()), []string{"✓ first", "⠼ A"})
-	a.Done()
+	a.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ first", "✓ A 0ms"})
 }
@@ -211,7 +211,7 @@ func TestHeightOverflow(t *testing.T) {
 	got := squash(h.screen())
 	eq(t, got, []string{"⠋ Root", "  … 5 lines", "  ✓ step 6 0ms", "  ✓ step 7 0ms", "  ✓ step 8 0ms"})
 
-	root.Done()
+	root.End(nil)
 	h.l.draw()
 	got = h.screen()
 	if len(got) != 9 || !strings.Contains(got[1], "step 1") || !strings.Contains(got[8], "step 8") {
@@ -245,7 +245,7 @@ func TestParentEndedClosesChildren(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	ctx, parent := Start(h.ctx, "Parent")
 	Start(ctx, "Orphaned")
-	parent.Done()
+	parent.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ Parent 0ms", "  ✗ Orphaned (parent ended) 0ms"})
 }
@@ -253,11 +253,11 @@ func TestParentEndedClosesChildren(t *testing.T) {
 func TestLogAfterCommit(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	ctx, task := Start(h.ctx, "Task")
-	task.Done()
+	task.End(nil)
 	h.l.draw()
 	Warn(ctx, "late")
 	_, late := Start(ctx, "late task")
-	late.Done()
+	late.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ Task 0ms", "  ⚠ late", "  ✓ late task 0ms"})
 }
@@ -265,7 +265,7 @@ func TestLogAfterCommit(t *testing.T) {
 func TestLateTaskIsLiveUntilItEnds(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	ctx, task := Start(h.ctx, "Task")
-	task.Done()
+	task.End(nil)
 	h.l.draw()
 
 	ctx, late := Start(ctx, "late task")
@@ -273,7 +273,7 @@ func TestLateTaskIsLiveUntilItEnds(t *testing.T) {
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ Task 0ms", "  ⠙ late task", "    → inside"})
 
-	late.Done()
+	late.End(nil)
 	h.l.draw()
 	Info(ctx, "after")
 	h.l.draw()
@@ -334,11 +334,11 @@ func TestNonTTY(t *testing.T) {
 	_, b := Start(ctx, "B")
 	fmt.Fprintln(Output(ctx1), "hidden while running")
 	Info(ctx1, "inside")
-	b.Done()
+	b.End(nil)
 	if buf.Len() != 0 {
 		t.Fatalf("printed before A committed: %q", buf.String())
 	}
-	a.Done()
+	a.End(nil)
 	out := buf.String()
 	if strings.Contains(out, "\033") || strings.Contains(out, "\r") {
 		t.Fatalf("escape codes in non-tty output: %q", out)
@@ -349,9 +349,7 @@ func TestNonTTY(t *testing.T) {
 func TestCloseEndsRunningTasks(t *testing.T) {
 	h := newTTY(t, 80, 24, false)
 	Start(h.ctx, "left running")
-	if err := h.l.Close(); err != nil {
-		t.Fatal(err)
-	}
+	h.l.Close()
 	eq(t, squash(h.screen()), []string{"✗ left running (runner closed) 0ms"})
 }
 
@@ -361,7 +359,7 @@ func TestDebugHiddenUnlessVerbose(t *testing.T) {
 		ctx, d := StartDebug(h.ctx, "debug task")
 		Info(ctx, "child of debug")
 		_ = Run(ctx, "nested", func(context.Context) error { return nil })
-		d.Done()
+		d.End(nil)
 		Debug(h.ctx, "debug line")
 		_ = Run(h.ctx, "visible", func(context.Context) error { return nil })
 		h.l.draw()
@@ -378,8 +376,8 @@ func TestNoRunnerIsNoop(t *testing.T) {
 	ctx := context.Background()
 	Info(ctx, "x")
 	ctx, task := Start(ctx, "t")
-	task.Done()
-	task.Fail(errors.New("x"))
+	task.End(nil)
+	task.End(errors.New("x"))
 	if Output(ctx) == nil {
 		t.Fatal("nil writer")
 	}
@@ -454,7 +452,7 @@ func TestParallelRace(t *testing.T) {
 		steps[i] = Step{fmt.Sprintf("s%d", i), func(ctx context.Context) error {
 			for j := 0; j < 20; j++ {
 				fmt.Fprintf(Output(ctx), "line %d\n", j)
-				Info(ctx, "msg", "j", j)
+				Info(ctx, fmt.Sprintf("msg %d", j))
 			}
 			return nil
 		}}

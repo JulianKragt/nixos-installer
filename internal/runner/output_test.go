@@ -30,7 +30,7 @@ func TestOutputWriter(t *testing.T) {
 	if strings.Join(task.n.tail, "|") != strings.Join(want, "|") {
 		t.Fatalf("tail = %q, want %q", task.n.tail, want)
 	}
-	task.Done() // flushes the partial line
+	task.End(nil) // flushes the partial line
 	if got := task.n.tail[len(task.n.tail)-1]; got != "no newline at end" {
 		t.Fatalf("last = %q", got)
 	}
@@ -45,7 +45,7 @@ func TestTailShownWhileRunningDroppedOnSuccess(t *testing.T) {
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"⠋ Cmd", "│ out 4", "│ out 5", "│ out 6", "│ out 7", "│ out 8"})
 
-	task.Done()
+	task.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ Cmd 0ms"})
 }
@@ -90,8 +90,8 @@ func TestFileSink(t *testing.T) {
 		}},
 	)
 	_, dbg := StartDebug(ctx, "debug task")
-	dbg.Done()
-	base.Done()
+	dbg.End(nil)
+	base.End(nil)
 
 	file := f.String()
 	if strings.Contains(file, "\033") {

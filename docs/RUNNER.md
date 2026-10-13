@@ -22,15 +22,18 @@ ui.Close()                             // must run before os.Exit, restores the 
 
 // Tasks
 runner.Run(ctx, "Title", func(ctx context.Context) error {...}) error   // preferred
-ctx, t := runner.Start(ctx, "Title"); defer t.End(&err)                  // manual; also t.Done(), t.Fail(err)
+ctx, t := runner.Start(ctx, "Title"); ...; t.End(err)                   // manual; nil = ✓
 ctx, t := runner.StartDebug(ctx, "Title")      // hidden (with children) unless Verbose
+
+// Steps one after another, stopping at the first error
+runner.RunSteps(ctx, runner.Step{Title: "A", Fn: func(ctx context.Context) error {...}}, ...)
 
 // Parallel: each step is its own child task, first error cancels siblings,
 // errors are joined (sibling-cancel errors are dropped).
 runner.Parallel(ctx, runner.Step{Title: "A", Fn: func(ctx context.Context) error {...}}, ...)
 
 // Messages go into ctx's task
-runner.Debug/Info/Warn/Error(ctx, "msg", "key", val)   // key/value pairs, appended as key=val
+runner.Debug/Info/Warn/Error(ctx, "msg")
 
 // Command output (tail under the task, full text in the log file).
 // pipeline.Machine.Run already writes here.
@@ -38,6 +41,7 @@ runner.Output(ctx)                             // io.Writer
 
 // Questions to the operator
 line, err := runner.Ask(ctx, "Target IP address: ")
+pw, err := runner.AskSecret(ctx, "SSH password: ")                // no echo on a terminal, never logged
 i, err := runner.Choose(ctx, "Select the install disk:", items)   // numbered list, returns the index
 ```
 
@@ -66,6 +70,6 @@ i, err := runner.Choose(ctx, "Select the install disk:", items)   // numbered li
 
 `runner.go` Runner/Options/ctx/level funcs/file sink · `task.go` nodes, Start/Run/End/Parallel · `tty.go` ticker, commit, layout · `ask.go` Ask/Choose, prompt layout and erasing · `output.go` command-output writer · `format.go` formatting helpers, colors, spinner frames.
 
-Tests build a Runner with `newRunner(opts, tty, size)`, a fake clock (`l.now`) and call `l.draw()` directly (see `runner_test.go` for the fake terminal; `ask_test.go` for an open question). `go run ./cmd/logdemo [-verbose]` shows the look.
+Tests build a Runner with `newRunner(opts, tty, size)`, a fake clock (`l.now`) and call `l.draw()` directly (see `runner_test.go` for the fake terminal; `ask_test.go` for an open question).
 
-Not built yet (design leaves room): full plain/CI mode, handing the terminal to an interactive command (`ssh -t`), a secret prompt without echo.
+Not built yet (design leaves room): full plain/CI mode, handing the terminal to an interactive command (`ssh -t`).

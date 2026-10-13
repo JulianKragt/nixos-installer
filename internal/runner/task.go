@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -62,13 +63,11 @@ func (n *node) path() string {
 	for p := n; p != nil; p = p.parent {
 		titles = append(titles, p.title)
 	}
-	for i, j := 0, len(titles)-1; i < j; i, j = i+1, j-1 {
-		titles[i], titles[j] = titles[j], titles[i]
-	}
+	slices.Reverse(titles)
 	return strings.Join(titles, " › ")
 }
 
-// finished reports whether n and everything below it is done.
+// finished reports whether n has ended.
 func (n *node) finished() bool { return n.state != stateRunning }
 
 // Task is a handle on a running task. It only handles lifecycle; logging
@@ -124,28 +123,8 @@ func start(ctx context.Context, title string, lv level) (context.Context, *Task)
 	return context.WithValue(ctx, ctxKey{}, &ctxVal{l: l, n: n}), &Task{l: l, n: n}
 }
 
-// End finishes the task: ✓ if *errp is nil, else ✗ with the error.
-// Use it as defer t.End(&err).
-func (t *Task) End(errp *error) {
-	if errp != nil && *errp != nil {
-		t.Fail(*errp)
-		return
-	}
-	t.Done()
-}
-
-// Done finishes the task successfully.
-func (t *Task) Done() { t.finish(nil) }
-
-// Fail finishes the task as failed.
-func (t *Task) Fail(err error) {
-	if err == nil {
-		err = errors.New("failed")
-	}
-	t.finish(err)
-}
-
-func (t *Task) finish(err error) {
+// End finishes the task: ✓ if err is nil, else ✗ with the error.
+func (t *Task) End(err error) {
 	if t == nil || t.l == nil {
 		return
 	}
@@ -229,10 +208,10 @@ func Run(ctx context.Context, title string, fn func(context.Context) error) (err
 	ctx, t := Start(ctx, title)
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fail(panicError(r, false))
+			t.End(panicError(r, false))
 			panic(r)
 		}
-		t.End(&err)
+		t.End(err)
 	}()
 	return fn(ctx)
 }
@@ -294,13 +273,13 @@ func Parallel(ctx context.Context, steps ...Step) error {
 			defer func() {
 				if r := recover(); r != nil {
 					err = panicError(r, true)
-					tasks[i].Fail(err)
+					tasks[i].End(err)
 					errs[i] = err
 					cancel()
 				}
 			}()
 			err = s.Fn(ctxs[i])
-			tasks[i].End(&err)
+			tasks[i].End(err)
 			errs[i] = err
 			if err != nil {
 				cancel()

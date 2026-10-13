@@ -82,7 +82,7 @@ func TestChooseDisk(t *testing.T) {
 		want       string
 		wantErr    string
 	}{
-		{"none keeps recorded", nil, "/dev/recorded", "", "/dev/recorded", ""},
+		{"none despite recorded", nil, "/dev/recorded", "", "", "--disk"},
 		{"none and nothing recorded", nil, "", "", "", "--disk"},
 		{"recorded wins without asking", []Disk{a, b}, "/dev/nvme0n1", "", "/dev/nvme0n1", ""},
 		{"single is taken without asking", []Disk{a}, "/dev/recorded", "", "/dev/vda", ""},

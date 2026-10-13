@@ -2,12 +2,26 @@ package pipeline
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 )
+
+// ErrAuth is what BootstrapKey returns when the target rejects the password.
+var ErrAuth = errors.New("password authentication failed")
+
+// authError wraps err in ErrAuth when it is the ssh package's authentication
+// failure, which has no type of its own.
+func authError(err error) error {
+	if strings.Contains(err.Error(), "unable to authenticate") {
+		return fmt.Errorf("%w: %w", ErrAuth, err)
+	}
+	return err
+}
 
 // BootstrapKey connects to addr:22 as root with password, installs
 // authorizedKeys into /root/.ssh/authorized_keys, and disconnects.
@@ -26,19 +40,12 @@ func BootstrapKey(ctx context.Context, addr, password, authorizedKeys string) er
 		return err
 	}
 	// Closing conn interrupts ssh.NewClientConn and sess.Run, which take no ctx.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			conn.Close()
-		case <-done:
-		}
-	}()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		conn.Close()
-		return err
+		return authError(err)
 	}
 	client := ssh.NewClient(c, chans, reqs)
 	defer client.Close()

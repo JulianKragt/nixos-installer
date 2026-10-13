@@ -47,7 +47,7 @@ type Runner struct {
 	mu      sync.Mutex
 	out     io.Writer
 	in      *bufio.Reader // nil: nobody to ask
-	inFile  *os.File      // non-nil when in is a real terminal file, for ReadPassword
+	inFile  *os.File      // non-nil when in is a terminal, for ReadPassword
 	file    io.Writer     // nil: no log file
 	verbose bool
 	now     func() time.Time
@@ -63,7 +63,6 @@ type Runner struct {
 	cursorHidden bool
 	closed       bool
 	suspended    bool // an Ask is waiting for input; the live area is frozen
-	writeErr     error
 	rootOut      *outputWriter
 
 	stop chan struct{}
@@ -112,7 +111,7 @@ func newRunner(opts Options, tty bool, size func() (int, int)) *Runner {
 	}
 	if opts.In != nil {
 		l.in = bufio.NewReader(opts.In)
-		if f, ok := opts.In.(*os.File); ok {
+		if f, ok := opts.In.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 			l.inFile = f
 		}
 	}
@@ -135,7 +134,7 @@ func (l *Runner) tick() {
 
 // Close stops the ticker, ends tasks that are still running, draws a final
 // time and restores the cursor. It must run before os.Exit.
-func (l *Runner) Close() error {
+func (l *Runner) Close() {
 	l.once.Do(func() {
 		close(l.stop)
 		l.wg.Wait()
@@ -152,16 +151,11 @@ func (l *Runner) Close() error {
 			l.cursorHidden = false
 		}
 	})
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.writeErr
 }
 
 // write sends s to Out. Caller must hold l.mu.
 func (l *Runner) write(s string) {
-	if _, err := io.WriteString(l.out, s); err != nil && l.writeErr == nil {
-		l.writeErr = err
-	}
+	io.WriteString(l.out, s)
 }
 
 // fileEvent records an event for n in the log file, one line without ANSI
@@ -179,9 +173,7 @@ func (l *Runner) fileEvent(sym string, n *node, msg string) {
 	if path := n.path(); path != "" {
 		line += path + " "
 	}
-	if _, err := io.WriteString(l.file, line+"| "+msg+"\n"); err != nil && l.writeErr == nil {
-		l.writeErr = err
-	}
+	io.WriteString(l.file, line+"| "+msg+"\n")
 }
 
 // afterEvent redraws immediately when no ticker is going to do it.
@@ -214,24 +206,24 @@ func from(ctx context.Context) *ctxVal {
 }
 
 // Debug logs a debug message into ctx's task. Shown only when verbose.
-func Debug(ctx context.Context, msg string, args ...any) { logAt(ctx, levelDebug, msg, args) }
+func Debug(ctx context.Context, msg string) { logAt(ctx, levelDebug, msg) }
 
 // Info logs an informational message into ctx's task.
-func Info(ctx context.Context, msg string, args ...any) { logAt(ctx, levelInfo, msg, args) }
+func Info(ctx context.Context, msg string) { logAt(ctx, levelInfo, msg) }
 
 // Warn logs a warning into ctx's task.
-func Warn(ctx context.Context, msg string, args ...any) { logAt(ctx, levelWarn, msg, args) }
+func Warn(ctx context.Context, msg string) { logAt(ctx, levelWarn, msg) }
 
 // Error logs an error into ctx's task.
-func Error(ctx context.Context, msg string, args ...any) { logAt(ctx, levelError, msg, args) }
+func Error(ctx context.Context, msg string) { logAt(ctx, levelError, msg) }
 
-func logAt(ctx context.Context, lv level, msg string, args []any) {
+func logAt(ctx context.Context, lv level, msg string) {
 	v := from(ctx)
 	if v == nil {
 		return
 	}
 	v.l.mu.Lock()
 	defer v.l.mu.Unlock()
-	v.l.logLocked(v.n, lv, oneLine(format(msg, args)))
+	v.l.logLocked(v.n, lv, oneLine(msg))
 	v.l.afterEvent()
 }

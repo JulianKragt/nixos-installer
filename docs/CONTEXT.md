@@ -110,9 +110,8 @@ Problems found. Julian is fixing them in the migration to pipeline paths; they a
 
 ```
 cmd/nixos-installer/     main.go    signals, log file, runner, wiring
-                         flags.go   --target --host --config --disk --verbose
+                         flags.go   --target --host --config --disk --ssh-password --verbose
                          inputs.go  asks for what the flags left empty, loads the host's state
-cmd/logdemo/             shows the look of the runner (dev only)
 internal/runner/         live task tree, log file, questions to the operator; see docs/RUNNER.md
 internal/pipeline/       the engine every stage uses
                          pipeline.go  Inputs, Env, Stage, Run (resume loop)
@@ -219,5 +218,5 @@ Add to the bootstrap module : `git`, `sops`, `age`, `ssh-to-age`, `vim`, and wha
 - **Machines**: `pipeline.Machine` runs a command locally or through the system `ssh`, with output streamed to the runner and stdin for secrets (`RunStdin`). Still to add with the stage that needs it: an opt-out from streaming for commands that print secrets, and an interactive mode (`ssh -t`, attach the terminal, stop the spinner first) for vim.
 - **Host key**: `pipeline.SSH` still disables host key checking (TODO in `machine.go`). Stage 0.2 should pin the key (TOFU into a known_hosts file under the state dir) by extending that option list, and pass the same options to nixos-anywhere / nixos-rebuild so there is one SSH configuration.
 - **Tool helpers** to add, each in its own package once a second stage needs it (§4): `nix eval --json`, `nixos-anywhere`, `ssh-keyscan`, `git`, `sops`, `nixos-rebuild`. Do ssh→age conversion and `.sops.yaml` editing in-process.
-- **CLI** (`cmd/nixos-installer/flags.go`, `inputs.go`): `--target` (prompted when empty; IPv4, IPv6, or link-local IPv6 with zone such as `fe80::1%eth0`), `--host` (picked from `hosts/nixos/*/bootstrap.nix` when empty), `--config` (default `./`), `--disk` (picked on the target when empty), `--verbose`. Planned: `install --host --target` (full) and `secrets --host --target` (Phase 2–3 resume, as in Pipeline 4.2, by filtering `stages.All`); `--state-dir`.
+- **CLI** (`cmd/nixos-installer/flags.go`, `inputs.go`): `--target` (prompted when empty; IPv4, IPv6, or link-local IPv6 with zone such as `fe80::1%eth0`), `--host` (picked from `hosts/nixos/*/bootstrap.nix` when empty), `--config` (prompted when empty), `--disk` (picked on the target when empty), `--ssh-password` (root password for the first key install; prompted when key auth fails and it is empty), `--verbose`. Planned: `install --host --target` (full) and `secrets --host --target` (Phase 2–3 resume, as in Pipeline 4.2, by filtering `stages.All`); `--state-dir`.
 - **Secrets hygiene**: never put secrets in argv or logs (bash script already follows this — keep it), always `umask 077` on target, cleanup in a deferred step even on failure.

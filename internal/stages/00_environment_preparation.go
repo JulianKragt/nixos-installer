@@ -29,38 +29,7 @@ func environmentPreparation(ctx context.Context, env *pipeline.Env) error {
 			return dialTCP(ctx, net.JoinHostPort(env.Target, "22"))
 		}},
 		{Title: "Set up SSH access", Fn: func(ctx context.Context) error {
-			_, err := env.Remote.Run(ctx, "true")
-			if err == nil {
-				return nil // key auth already works
-			}
-			if !isSSHAuthError(err) {
-				return err
-			}
-			pw := env.Inputs.SSHPassword
-			if pw == "" {
-				var askErr error
-				pw, askErr = runner.AskSecret(ctx, "SSH password for root@"+env.Target+": ")
-				if askErr != nil {
-					return fmt.Errorf("SSH password: %w", askErr)
-				}
-				if pw == "" {
-					return err
-				}
-			}
-			keys, err := collectProviderKeys(ctx, env.Local)
-			if err != nil {
-				return err
-			}
-			if err := pipeline.BootstrapKey(ctx, env.Target, pw, keys); err != nil {
-				if isSSHAuthError(err) {
-					return fmt.Errorf("%w\n\nHint: the target rejected password auth. Set a root password first:\n  passwd root", err)
-				}
-				return err
-			}
-			if _, err := env.Remote.Run(ctx, "true"); err != nil {
-				return fmt.Errorf("key auth after install: %w", err)
-			}
-			return nil
+			return setupSSHAccess(ctx, env)
 		}},
 		{Title: "Check config flake", Fn: func(context.Context) error {
 			return checkConfig(env.ConfigDir)
@@ -82,6 +51,43 @@ func environmentPreparation(ctx context.Context, env *pipeline.Env) error {
 	}
 	env.State.Disk = disk
 	runner.Info(ctx, "Disk: "+disk)
+	return nil
+}
+
+// setupSSHAccess makes key auth to the target work. When it does not yet, the
+// provider's public keys are installed with the root password.
+func setupSSHAccess(ctx context.Context, env *pipeline.Env) error {
+	_, err := env.Remote.Run(ctx, "true")
+	if err == nil {
+		return nil // key auth already works
+	}
+	if !isSSHAuthError(err) {
+		return err
+	}
+	pw := env.SSHPassword
+	if pw == "" {
+		var askErr error
+		pw, askErr = runner.AskSecret(ctx, "SSH password for root@"+env.Target+": ")
+		if askErr != nil {
+			return fmt.Errorf("SSH password: %w", askErr)
+		}
+		if pw == "" {
+			return err
+		}
+	}
+	keys, err := collectProviderKeys(ctx, env.Local)
+	if err != nil {
+		return err
+	}
+	if err := pipeline.BootstrapKey(ctx, env.Target, pw, keys); err != nil {
+		if errors.Is(err, pipeline.ErrAuth) {
+			return fmt.Errorf("%w\n\nHint: the target rejected password auth. Set a root password first:\n  passwd root", err)
+		}
+		return err
+	}
+	if _, err := env.Remote.Run(ctx, "true"); err != nil {
+		return fmt.Errorf("key auth after install: %w", err)
+	}
 	return nil
 }
 
@@ -196,7 +202,7 @@ func parseLsblk(out string) []Disk {
 
 // chooseDisk picks the install disk among the candidates found on the target.
 // The disk recorded by an earlier run wins, a lone candidate is taken as is and
-// with several the operator chooses. Without candidates the recorded disk stays.
+// with several the operator chooses.
 func chooseDisk(ctx context.Context, candidates []Disk, recorded string) (string, error) {
 	for _, d := range candidates {
 		if d.Path == recorded {
@@ -205,10 +211,7 @@ func chooseDisk(ctx context.Context, candidates []Disk, recorded string) (string
 	}
 	switch len(candidates) {
 	case 0:
-		if recorded == "" {
-			return "", errors.New("no installable disk found on target; use --disk")
-		}
-		return recorded, nil
+		return "", errors.New("no installable disk found on target; use --disk")
 	case 1:
 		return candidates[0].Path, nil
 	}

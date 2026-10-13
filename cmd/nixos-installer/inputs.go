@@ -45,44 +45,51 @@ func resolveInputs(ctx context.Context, in *pipeline.Inputs, stateDir string) (*
 // askTarget returns target, or asks for the target IP until the answer is
 // valid when target is empty.
 func askTarget(ctx context.Context, target string) (string, error) {
-	prompt := "Target IP address: "
-	for target == "" {
-		line, err := runner.Ask(ctx, prompt)
-		if errors.Is(err, io.EOF) {
-			return "", errors.New("--target is required")
-		}
-		if err != nil {
-			return "", err
-		}
-		if validateTarget(line) != nil {
-			prompt = fmt.Sprintf("Target IP address (%q is not a valid IP): ", line)
-			continue
-		}
-		target = line
+	if target != "" {
+		return target, nil
 	}
-	return target, nil
+	return askUntil(ctx, "Target IP address", "--target", func(s string) (string, error) {
+		if validateTarget(s) != nil {
+			return "", fmt.Errorf("%q is not a valid IP", s)
+		}
+		return s, nil
+	})
 }
 
 // askConfigDir returns dir, or asks for the nixos-config directory until it
 // holds a hosts/nixos directory when dir is empty. A leading ~ is expanded.
 func askConfigDir(ctx context.Context, dir string) (string, error) {
-	prompt := "Path to nixos-config: "
-	for dir == "" {
+	if dir != "" {
+		return filepath.Abs(expandHome(dir))
+	}
+	return askUntil(ctx, "Path to nixos-config", "--config", func(s string) (string, error) {
+		s = expandHome(s)
+		if fi, err := os.Stat(filepath.Join(s, "hosts", "nixos")); s == "" || err != nil || !fi.IsDir() {
+			return "", fmt.Errorf("%q has no hosts/nixos", s)
+		}
+		return filepath.Abs(s)
+	})
+}
+
+// askUntil asks for label until check accepts the answer and returns what
+// check made of it. A rejected answer is explained in the next prompt. Without
+// an operator to ask, the error names the flag to use instead.
+func askUntil(ctx context.Context, label, flag string, check func(string) (string, error)) (string, error) {
+	prompt := label + ": "
+	for {
 		line, err := runner.Ask(ctx, prompt)
 		if errors.Is(err, io.EOF) {
-			return "", errors.New("--config is required")
+			return "", errors.New(flag + " is required")
 		}
 		if err != nil {
 			return "", err
 		}
-		line = expandHome(strings.TrimSpace(line))
-		if fi, err := os.Stat(filepath.Join(line, "hosts", "nixos")); line == "" || err != nil || !fi.IsDir() {
-			prompt = fmt.Sprintf("Path to nixos-config (%q has no hosts/nixos): ", line)
-			continue
+		v, err := check(line)
+		if err == nil {
+			return v, nil
 		}
-		dir = line
+		prompt = fmt.Sprintf("%s (%v): ", label, err)
 	}
-	return filepath.Abs(expandHome(dir))
 }
 
 func expandHome(p string) string {

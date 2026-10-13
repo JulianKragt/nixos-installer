@@ -185,7 +185,7 @@ func runInterruptible[T any](ctx context.Context, fn func() (T, error)) (T, erro
 func promptLines(text string, width int) int {
 	n := 0
 	for _, seg := range strings.Split(text, "\n") {
-		w := len([]rune(seg))
+		w := runeLen(seg)
 		rows := (w + width - 1) / width
 		if rows == 0 {
 			rows = 1

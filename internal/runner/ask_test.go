@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestAskShowsQuestionInTaskAndErasesIt(t *testing.T) {
 		t.Error("cursor not hidden again after the answer")
 	}
 
-	task.Done()
+	task.End(nil)
 	h.l.draw()
 	eq(t, squash(h.screen()), []string{"✓ Task 0ms"})
 }
@@ -204,5 +205,26 @@ func TestPromptLines(t *testing.T) {
 		if got := promptLines(c.text, c.width); got != c.want {
 			t.Errorf("promptLines(%q, %d) = %d, want %d", c.text, c.width, got, c.want)
 		}
+	}
+}
+
+func TestAskSecretReadsALineFromAPipe(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	io.WriteString(pw, "hunter2\n")
+	pw.Close()
+
+	// A pipe is an *os.File like a terminal, but has no echo to turn off.
+	file := &syncBuf{}
+	l := newRunner(Options{In: pr, File: file}, false, nil)
+	got, err := AskSecret(NewContext(context.Background(), l), "Password: ")
+	if got != "hunter2" || err != nil {
+		t.Fatalf("answer = %q, %v", got, err)
+	}
+	if strings.Contains(file.String(), "hunter2") {
+		t.Errorf("secret in the log file: %q", file.String())
 	}
 }

@@ -77,4 +77,3 @@ func lastLine(s string) string {
 	s = strings.TrimSpace(s)
 	return s[strings.LastIndexByte(s, '\n')+1:]
 }
-
