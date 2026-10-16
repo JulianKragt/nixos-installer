@@ -116,6 +116,7 @@ internal/runner/         live task tree, log file, questions to the operator; se
 internal/pipeline/       the engine every stage uses
                          pipeline.go  Inputs, Env, Stage, Run (resume loop)
                          machine.go   Machine: run a command here or on the target over ssh
+                         bootstrap.go BootstrapKey: install the provider's keys on the target with the root password
                          state.go     State, LoadState, Save
 internal/stages/         one file per stage, nothing else
                          stages.go    All: the ordered stage list
@@ -142,6 +143,8 @@ Three kinds of data, kept apart:
 - No interface without two implementations, no new package unless a second stage needs the code.
 - Stages are plain functions; everything they need comes in through `ctx` and `*pipeline.Env`.
 - State holds only what must survive a restart.
+- Cleanup that has to run after Ctrl+C uses `context.WithoutCancel(ctx)`: a cancelled `ctx` makes every `Machine.Run` fail at once.
+- How `Machine`, host key pinning, the env wiring and re-runs are meant to grow: `docs/ROADMAP.md` "Plumbing design".
 
 ---
 
@@ -153,7 +156,7 @@ Three kinds of data, kept apart:
 | 0.1 Provider preparation | provider | `eval_spec`, preflight: nix-secrets present, disk not `REPLACE_ME`, ping, `ssh root@ip`, remote `nix`/`lsblk`/internet check, `test -b $DEVICE`, show `lsblk`, type "install", LUKS prompt → `/tmp/disko-password` | Keep the typed confirmation + lsblk display. Stream the LUKS pass via stdin, never argv. Use a TCP dial instead of ping. |
 | 0.2 Base install | provider → target | `nix run github:nix-community/nixos-anywhere -- [--generate-hardware-config …] --build-on-remote --flake .#<host>-bootstrap --target-host root@ip`; commit hardware config; skip if `/run/current-system` exists | Then wait for SSH (`sshWaitTimeout`, poll 5s), TOFU then pin ed25519 host key → state. |
 | 1.1 Host identity | target | `cat /etc/ssh/ssh_host_ed25519_key.pub \| ssh-to-age` (run on provider) | Can be done in Go with `github.com/Mic92/ssh-to-age` (library) — no tool needed. Store recipient + fingerprint in state. |
-| 1.2 Readiness | target | partial (internet ping) | Add `git ls-remote`-style GitHub reachability + `git sops vim nix` presence. Marker `awaiting-secrets-phase`. |
+| 1.2 Readiness | target | partial (internet ping) | Add `git ls-remote`-style GitHub reachability + `git sops vim nix` presence. |
 | 2.0 Auth bootstrap | target | — (relied on operator's SSH agent on provider) | New. See §6.3. |
 | 2.1 Sync repo | target | — (used local `../nix-secrets`) | New: clone/fetch/reset on target. |
 | 2.2 Recipients / .sops.yaml | target | python insert of `&host_<h>` + append rule; conflict check when anchor exists with another key | Structural YAML edit, idempotent, also host-users rules. |
@@ -161,7 +164,7 @@ Three kinds of data, kept apart:
 | 2.4 Encrypt/commit/push | target | `sops updatekeys -y hosts/<h>.yaml shared.yaml`, `git add -A; commit; push` | Commit only the listed paths (not `-A`). Verify `sops:` metadata in every secret file. Persist SHA. |
 | 3.1 Flake input | provider or target | `nix flake update nix-secrets` + commit `flake.lock` (in config, on provider) | See §6.4. |
 | 3.2 Rebuild | target | `nixos-rebuild --flake .#<h> --target-host root@ip --build-host root@ip switch` (from provider) | Pipeline wants it on target. Validation list from legacy Phase 9 is reusable. |
-| 3.3 Cleanup | target | `trap rm KNOWN_HOSTS` only | New: wipe temp creds, optional upstream revoke, marker `converged`. |
+| 3.3 Cleanup | target | `trap rm KNOWN_HOSTS` only | New: wipe temp creds, optional upstream revoke. |
 | 4.1 Policy | provider/target | — | New: no plaintext, rule coverage for every `hosts/*`/`host-users/*`. |
 | 4.2 Recovery | — | `--enroll-sops`, `--deploy-remote` modes | Becomes "resume from persisted state". |
 
@@ -213,7 +216,7 @@ Add to the bootstrap module : `git`, `sops`, `age`, `ssh-to-age`, `vim`, and wha
 
 ## 7. Direction for the Go code
 
-- **State**: `pipeline.State`, JSON per host in `~/.local/state/nixos-installer/<host>.json`, saved after every stage. Has `Host`, `Disk`, `Completed`. To add as stages need them: `Users []string`, `PrimaryUser`, `HostKeyFingerprint`, `HostRecipient`, `UserRecipients map[string]string`, `SecretsCommit`, `ConfigRev`, `Marker` (`awaiting-secrets-phase`, `converged`).
+- **State**: `pipeline.State`, JSON per host in `~/.local/state/nixos-installer/<host>.json`, saved after every stage. Has `Host`, `Disk`, `Completed`. To add as stages need them (no user list: stages evaluate `accounts.users` themselves, see ROADMAP "Plumbing design"): `PrimaryUser`, `HostKeyFingerprint`, `HostRecipient`, `UserRecipients map[string]string`, `SecretsCommit`, `ConfigRev`. No phase marker: `Completed` says whether 1.2 and 3.3 are done (ROADMAP "Plumbing design", Phase).
 - **Stage IDs**: strings matching the Pipeline (`"0.1"`, `"2.3"`…); the order is the order of `stages.All`; resume = skip what is in `State.Completed`.
 - **Machines**: `pipeline.Machine` runs a command locally or through the system `ssh`, with output streamed to the runner and stdin for secrets (`RunStdin`). Still to add with the stage that needs it: an opt-out from streaming for commands that print secrets, and an interactive mode (`ssh -t`, attach the terminal, stop the spinner first) for vim.
 - **Host key**: `pipeline.SSH` still disables host key checking (TODO in `machine.go`). Stage 0.2 should pin the key (TOFU into a known_hosts file under the state dir) by extending that option list, and pass the same options to nixos-anywhere / nixos-rebuild so there is one SSH configuration.
